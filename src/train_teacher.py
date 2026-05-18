@@ -14,8 +14,8 @@ from torch.optim.lr_scheduler import MultiStepLR
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
-from resnet_cifar import resnet110
-from utils import train_one_epoch, evaluate
+from src.resnet_cifar import resnet110
+from src.utils import train_one_epoch, evaluate
 
 EPOCHS = 100
 BATCH_SIZE = 128

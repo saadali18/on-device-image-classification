@@ -1,0 +1,370 @@
+\documentclass{article}
+% Recommended, but optional, packages for figures and better typesetting:
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subfigure}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[accepted]{icml2025}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage{xurl}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THEOREMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\usepackage[textsize=tiny]{todonotes}
+
+\begin{document}
+\icmltitlerunning{\icmltitlerunning{Knowledge Distillation for Efficient On-Device Image Classification}}
+\twocolumn[
+\icmltitle{Knowledge Distillation for Efficient On-Device Image Classification}
+
+\icmlsetsymbol{equal}{*}
+
+\begin{icmlauthorlist}
+\icmlauthor{Abdul Hafeez (25280098)}{lums}
+\icmlauthor{Verda Batool (24280065)}{lums}
+\icmlauthor{Saad Ali (25280011)}{lums}
+\end{icmlauthorlist}
+
+\icmlaffiliation{lums}{Department of Electrical Engineering, Lahore University of Management Sciences, Lahore, Pakistan}
+
+\icmlcorrespondingauthor{name}{email}
+
+\icmlkeywords{Knowledge Distillation, Model Compression, On-Device Deep Learning, CIFAR-100, ResNet, Temperature Scaling, Ablation Study}
+\vskip 0.3in
+]
+
+
+% ========================================================================
+\begin{abstract}
+Deploying accurate image classifiers on resource-constrained edge devices requires compact models that preserve most of a large model's accuracy. We study response-based knowledge distillation \citep{hinton2015distilling} as a principled compression strategy on CIFAR-100, using a pretrained ResNet-110 teacher to supervise a ResNet-20 student ($6.3\times$ parameter reduction) via a combined hard-label cross-entropy and temperature-scaled KL divergence objective. We establish a student baseline of \textbf{67.63\%} Test Top-1 accuracy under standard cross-entropy training, providing the lower bound for distillation gains. Remaining work includes teacher training, orthogonal ablations over temperature $\tau$ and loss-weighting $\alpha$, architectural scaling across student depth and width to characterize the student-teacher accuracy gap, and a distributional analysis of the dark knowledge transferred from teacher to student.
+\end{abstract}
+% ========================================================================
+
+\section{Introduction}
+\label{sec:intro}
+Deep Convolutional Neural Networks (CNNs) like ResNet-110 achieve state-of-the-art accuracy using skip connections in an over-parameterized regime ($\approx$1.7 million parameters) \citep{he2016deep}. However, the lifecycle of such a deep learning model is characterized by a fundamental asymmetry between the training and deployment phases. During the \textit{training} phase, computational resources are typically abundant: parallelized GPU clusters, large batch sizes, extensive epochs, and regularizers all serve the primary objective of maximizing generalization over a held-out test set. Latency is not a concern. Conversely, during \textit{deployment} to edge devices (e.g., mobile phones, embedded microcontrollers), the constraints flip entirely. The memory becomes strictly limited, making models like ResNet-110 impractical for such resource-constrained environments. Additionally, such hardware often lacks the massive parallel throughput of a GPU, enforcing hard limits on inference latency.
+% To formalize this using the standard notation for a feedforward neural network, let the input to a layer $l$ be denoted as $\vec{x}^{(l-1)} \in \mathbb{R}^{M^{(l-1)}}$, where $M^{(l-1)}$ is the dimensionality of the previous layer. The layer is parameterized by a weight matrix $W^{(l)} \in \mathbb{R}^{M^{(l)} \times M^{(l-1)}}$ and a bias vector $\vec{b}^{(l)} \in \mathbb{R}^{M^{(l)}}$. The forward pass computes the pre-activation $\vec{a}^{(l)} = W^{(l)}\vec{x}^{(l-1)} + \vec{b}^{(l)}$ and applies a non-linear activation function $\vec{x}^{(l)} = g(\vec{a}^{(l)})$.
+
+\citet{compression2006} first introduced the idea of model compression, demonstrating that a compact, faster neural network (student model) can be trained to approximate the function of a much larger, slower model (teacher model) with minimal loss in accuracy. \citet{hinton2015distilling} formalized this as \emph{Knowledge Distillation} (KD) for neural networks. % The key question then is: how much accuracy survives the move to a much smaller network?
+
+In standard $K$-class classification, a network produces $K$ logits and passes them through the softmax function
+\begin{equation}
+  \hat{y}_k = P(y = k \mid \vec{x})
+             = \frac{e^{z_k}}{\sum_{j=1}^K e^{z_j}},
+  \label{eq:softmax}
+\end{equation}
+where $z_k$ are the pre-softmax logits. Softmax translates unbounded logits into a normalized probability distribution which is optimized via the categorical cross-entropy loss
+\begin{equation}
+    L = -\frac{1}{N}\sum_{i=1}^N \sum_{k=1}^K y_{i,k} \log(\hat{y}_{i,k})
+    \label{eq:cce}
+\end{equation}
+against one-hot hard labels for the ground-truth class $\vec{y}_i \in \{0,1\}^K$ where
+$\sum_k y_{i,k} = 1$. A hard label $\vec{y}_i$ is fundamentally limited because it discards the underlying geometric similarity between classes; it identifies the correct class but says nothing about any other class, including ones that are visually or semantically close. A large teacher network\footnote{We will reference the teacher model with a superscript $T$ (e.g. $\hat{\vec{y}}^T$) and the student model with superscript $S$ (e.g. $\hat{\vec{y}}^S$).} trained to near-convergence absorbs this inter-class similarity into its weight matrices. Its output distribution $\hat{\vec{y}}^T$ places most mass on the correct class but assigns small but nonzero probabilities to visually similar classes, encoding what \citet{hinton2015distilling} call \emph{dark knowledge}. Knowledge distillation~\cite{hinton2015distilling} incorporates $\hat{\vec{y}}^T$ directly into the student's training objective alongside the ground-truth $\vec{y}_i$, so the student optimizes against both the correct answer and the teacher's learned similarity structure over all $K$ classes. This project studies that transfer — \emph{what} the teacher actually transfers, how it behaves under different hyperparameter settings, and where it fails.
+%%%%%% A problem: when training with hard labels, the gradient of the CCE loss with respect to the pre-softmax logit $z_k^S$ at the output layer is simply $\hat{y}_k^S - y_k$. For a sample where the correct class has probability 0.95 and all others are near-zero, the gradient is dominated by a single signal. The small differences between near-zero probabilities — which carry the inter-class similarity information — contribute negligibly to the gradient.
+
+\section{Literature Review}
+\label{sec:litreview}
+\subsection{Model Compression Landscape}
+\label{sec:compression}
+
+Based on the survey by \citet{gou2021knowledge}, modern model compression generally falls into three complementary families: knowledge \emph{distillation}, network \emph{pruning}, and network \emph{quantization}. Pruning removes redundant or inessential weights ($W_{ij}^{(l)} \approx 0$) (unstructured) or entire convolutional filters/weights (structured) from a pretrained network, reducing parameter count while leaving the architecture otherwise intact \citep{cheng2024surveydeepneuralnetwork}. Quantization reduces numerical precision of the weight matrices $W^{(l)}$ and activations $\vec{x}^{(l)}$---from 32-bit floats to 8-bit integers (INT8) or lower---shrinking memory and enabling faster arithmetic, also on the same architecture \citep{nagel2021whitepaperneuralnetwork}. Both methods start from a fixed network and modify it. Knowledge distillation takes a different approach entirely: it trains a new, compact (student) network from scratch, supervised by the larger (teacher) model. Pruning, quantization, and distillation are mutually compatible and are frequently pipelined in production environments. This paper is scoped to KD, and specifically to two forms of it: response-based distillation, which transfers knowledge through the teacher's output distribution, and feature-based distillation, which transfers it through intermediate layer representations. 
+
+\subsection{Response-Based Distillation}
+\label{sec:hinton}
+\paragraph{The hard-label gradient problem.}
+As established in Section~\ref{sec:intro}, the teacher's output $\hat{\vec{y}}^T$ encodes dark knowledge, the inter-class similarity structure that $\vec{y}_i$ discards. Can a student trained on hard labels access any of this structure? It cannot, and the reason is visible in the gradient.
+
+The gradient of Eq.~\eqref{eq:cce} with respect to the student's pre-softmax logit $z_k^S$ is
+\begin{equation}
+  \frac{\partial L}{\partial z_k^S} = \hat{y}_k^S - y_k. % Note: Should proof be added to appendix?
+  \label{eq:cce_grad}
+\end{equation}
+For every non-target class, $y_k = 0$, so the gradient reduces to $\hat{y}_k^S$. Because softmax outputs are strictly positive, this gradient is always positive. The gradient descent update becomes
+$$ z_k^S \leftarrow z_k^S - \eta(\hat{y}_k^S) ,$$ 
+strictly decreasing the logits of all non-target classes and pushing them toward $-\infty$, regardless of their true similarity to the correct class.
+
+\paragraph{Temperature scaling.}
+\citet{hinton2015distilling} solved this by introducing the temperature-scaled softmax.  For already-trained teacher logits $\vec{z}^T = [z_1^T, \dots, z_K^T]^T$, the soft output at temperature $\tau > 0$ is
+\begin{equation}
+\hat{y}_k^{T,\tau} = \frac{\exp(z_k^T / \tau)}{\sum_{j=1}^K \exp(z_j^T / \tau)}
+\label{eq:softtarget}
+\end{equation}
+The same scaling is applied to the student to produce $\hat{y}_k^{S,\tau}$. Increasing $\tau$ softens the distribution by increasing its variance, thereby significantly increasing the relative numerical magnitude of the gradient of incorrect classes so that they generate meaningful gradients for the student network. At $\tau = 1$, Eq. \eqref{eq:softtarget} is a standard softmax. As $\tau \to \infty$, all scaled logits $z_k^T/\tau$ approach 0 and $e^0 = 1$, the distribution becomes asymptotically uniform ($\hat{y}_k^{T,\tau} \to 1/K$); conversely, as $\tau \to 0$, it collapses into a one-hot argmax function. Because distillation requires a smoother probability distribution, we typically operate where $\tau > 1$.
+
+\paragraph{Training objective.}
+The student is trained on a weighted sum of two losses, $L_{\mathrm{hard}}$ and $L_{\mathrm{soft}}$. The hard-label component is the standard CCE from Eq.~\eqref{eq:cce}, evaluated against $\vec{y}_i$ using the student's output at $\tau = 1$
+\begin{equation}
+  L_{\mathrm{hard}}
+    = -\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
+        y_{i,k}\log\hat{y}_{i,k}^{S,1},
+  \label{eq:lhard}
+\end{equation}
+ensuring that the student learns to predict the correct ground-truth labels. It anchors the student to the actual objective, preventing it from solely mimicking the teacher's potential errors or biases.
+The soft-label component is the KL divergence between the softened-outputs of the teacher's and student's distributions, both evaluated at temperature $\tau>1$ via Eq.~\eqref{eq:softtarget}
+\begin{align}
+  L_{\mathrm{soft}}
+    &= \frac{1}{N}\sum_{i=1}^N
+        D_{\mathrm{KL}}\!\left(
+          \hat{\vec{y}}_i^{T,\tau}
+          \,\Big\|\,
+          \hat{\vec{y}}_i^{S,\tau}
+        \right) \nonumber \\
+    &= \frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
+        \hat{y}_{i,k}^{T,\tau}
+        \log\frac{\hat{y}_{i,k}^{T,\tau}}{\hat{y}_{i,k}^{S,\tau}}\label{eq:lsoft}\\
+    &= \frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
+        \hat{y}_{i,k}^{T,\tau}
+        \!\left(\log \hat{y}_{i,k}^{T,\tau} - \log \hat{y}_{i,k}^{S,\tau}\right)\nonumber\\
+    &= \underbrace{\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
+        \hat{y}_{i,k}^{T,\tau}\log \hat{y}_{i,k}^{T,\tau}}_{-H(\hat{\vec{y}}^{T,\tau})}
+      \;+\;
+      \underbrace{\left(-\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
+        \hat{y}_{i,k}^{T,\tau}\log \hat{y}_{i,k}^{S,\tau}\right)}_{H(\hat{\vec{y}}^{T,\tau},\,\hat{\vec{y}}^{S,\tau})}\nonumber\\
+    &= H(\hat{\vec{y}}^{T,\tau},\,\hat{\vec{y}}^{S,\tau}) - H(\hat{\vec{y}}^{T,\tau})\nonumber.
+\end{align}
+Since the teacher is fully pre-trained and its parameters are frozen during distillation, the teacher's output distribution $\hat{\vec{y}}^{T,\tau}$ is a constant with respect to the student parameters $\theta_S$. Consequently, $H(\hat{\vec{y}}^{T,\tau})$ is also a constant with respect to $\theta_S$, so minimizing $D_{\mathrm{KL}}(\hat{\vec{y}}^{T,\tau}\|\hat{\vec{y}}^{S,\tau})$ is equivalent to minimizing the cross-entropy $H(\hat{\vec{y}}^{T,\tau}, \hat{\vec{y}}^{S,\tau})$ with respect to the student's parameters.
+
+\paragraph{The $\tau^2$ scaling factor.}
+\citet{hinton2015distilling} argue that the soft-label loss in combined distillation loss must be weighted by $\tau^2$. To prove this to be the case, let us differentiate $L_{\mathrm{soft}}$, defined in Eq.~\eqref{eq:lsoft}, with respect to a student logit $z_k^S$. The gradient for a single sample (dropping index $i$ for convenience) is, by chain rule,
+\begin{equation}
+  \frac{\partial L_{\mathrm{soft}}}{\partial z_k^S}
+  = \sum_{j=1}^{K}
+      \frac{\partial L_{\mathrm{soft}}}{\partial \hat{y}_j^{S,\tau}}
+      \cdot
+      \frac{\partial \hat{y}_j^{S,\tau}}{\partial z_k^S}.
+  \label{eq:chain}
+\end{equation}
+We evaluate each term individually. Since the teacher terms are
+constant with respect to $\theta_S$, applying the logarithmic quotient rule and differentiating $-\sum_j \hat{y}_j^{T,\tau}\log\hat{y}_j^{S,\tau}$ with respect to $\hat{y}_j^{S,\tau}$ gives
+\begin{equation}
+  \frac{\partial L_{\mathrm{soft}}}{\partial \hat{y}_j^{S,\tau}}
+  = -\frac{\hat{y}_j^{T,\tau}}{\hat{y}_j^{S,\tau}}.
+  \label{eq:factor1}
+\end{equation}
+The student probability $\hat{y}_j^{S,\tau}$ depends on $z_k^S$
+only through the scaled pre-activation $a_k^S = z_k^S/\tau$, so
+a further application of the chain rule gives
+\begin{equation}
+  \frac{\partial \hat{y}_j^{S,\tau}}{\partial z_k^S}
+  = \frac{\partial \hat{y}_j^{S,\tau}}{\partial a_k^S}
+    \cdot
+    \underbrace{\frac{\partial a_k^S}{\partial z_k^S}}_{=\,1/\tau},
+  \label{eq:factor2_chain}
+\end{equation}
+where, by applying the quotient rule and considering the two distinct cases (diagonal and off-diagonal elements) for the jacobian,
+\begin{equation}
+  \frac{\partial \hat{y}_j^{S,\tau}}{\partial a_k^S}
+  = \hat{y}_j^{S,\tau}\!\left(\delta_{jk} - \hat{y}_k^{S,\tau}\right).
+  \label{eq:softmax_jac}
+\end{equation}
+Combining Eqs.~\eqref{eq:factor2_chain} and~\eqref{eq:softmax_jac} and substituting it along with Eq.~\eqref{eq:factor1} into Eq.~\eqref{eq:chain}
+\begin{align}
+  \frac{\partial L_{\mathrm{soft}}}{\partial z_k^S}
+  &= \sum_{j=1}^{K}
+      \left(-\frac{\hat{y}_j^{T,\tau}}{\hat{y}_j^{S,\tau}}\right)
+      \cdot
+      \frac{1}{\tau}\,\hat{y}_j^{S,\tau}
+        \!\left(\delta_{jk} - \hat{y}_k^{S,\tau}\right)
+  \nonumber\\
+  &= \frac{1}{\tau}\sum_{j=1}^{K}
+      \left(-\hat{y}_j^{T,\tau}\right)
+        \!\left(\delta_{jk} - \hat{y}_k^{S,\tau}\right)
+  \nonumber\\
+  &= \frac{1}{\tau}\!\left[
+      -\hat{y}_k^{T,\tau}
+      + \hat{y}_k^{S,\tau}\underbrace{\sum_{j=1}^{K}
+        \hat{y}_j^{T,\tau}}_{=\,1}
+    \right]
+  \nonumber\\
+  &= \frac{1}{\tau}\!\left(\hat{y}_k^{S,\tau}
+      - \hat{y}_k^{T,\tau}\right)
+  \nonumber\\
+  \intertext{Substituting Eq. \eqref{eq:softtarget}:}
+  &= \frac{1}{\tau}\!\left(
+        \frac{\exp(z_k^S/\tau)}{\sum_{j=1}^K \exp(z_j^S/\tau)}
+        -
+        \frac{\exp(z_k^T/\tau)}{\sum_{j=1}^K \exp(z_j^T/\tau)}
+     \right)
+  \nonumber\\
+  \intertext{Applying first-order Taylor approximation $e^u \approx 1 + u$, valid when $\tau$ is large relative to the logit magnitudes \citep{hinton2015distilling}:}
+  &\approx \frac{1}{\tau}\!\left(
+        \frac{1 + z_k^S/\tau}{\sum_{j=1}^K (1 + z_j^S/\tau)}
+        -
+        \frac{1 + z_k^T/\tau}{\sum_{j=1}^K (1 + z_j^T/\tau)}
+     \right)
+  \nonumber\\
+  &= \frac{1}{\tau}\!\left(
+        \frac{1 + z_k^S/\tau}{K + \frac{1}{\tau}\sum_{j=1}^K z_j^S}
+        -
+        \frac{1 + z_k^T/\tau}{K + \frac{1}{\tau}\sum_{j=1}^K z_j^T}
+     \right)
+  \nonumber\\
+  \intertext{Assuming logits are zero-meaned, i.e.\ $\sum_{j=1}^K z_j^S = \sum_{j=1}^K z_j^T = 0$ \citep{hinton2015distilling}:}
+  &= \frac{1}{\tau}\!\left(
+        \frac{1 + z_k^S/\tau}{K}
+        -
+        \frac{1 + z_k^T/\tau}{K}
+     \right)
+  \nonumber\\
+  &= \frac{1}{K\tau}\!\left(
+        1 + \frac{z_k^S}{\tau}
+        - 1 - \frac{z_k^T}{\tau}
+     \right)
+  \nonumber\\
+  &= \frac{1}{K\tau^2}\!\left(z_k^S - z_k^T\right).\nonumber
+  \label{eq:soft_grad_final}
+\end{align}
+Therefore, the gradient of $L_{\mathrm{soft}}$ scales as $1/\tau^2$, relative to the gradient of $L_{\mathrm{hard}}$, which carries no dependence on $\tau$. If we simply add the soft loss and hard loss together, raising the temperature would cause the soft gradient to shrink proportionally to $1/\tau^2$. Without correction, the optimizer would effectively ignore the soft targets (the \emph{dark knowledge}) and revert almost entirely to standard hard-label training. Multiplying $L_{\mathrm{soft}}$ by $\tau^2$ exactly cancels this shrinkage, keeping the balance between the two loss terms stable regardless of the chosen $\tau$. The combined distillation objective is therefore:
+%
+\begin{equation}
+  \boxed{
+  L_{\mathrm{KD}}
+    = \alpha \cdot L_{\mathrm{hard}}
+    + (1-\alpha)\cdot\tau^2 \cdot L_{\mathrm{soft}}
+  }
+  \label{eq:lkd}
+\end{equation}
+where $\alpha \in [0,1]$ controls the relative weight of hard versus soft supervision and $\tau$ controls the softness of the teacher distribution via Eq.~\eqref{eq:softtarget}.
+
+% \subsection{Feature-Based Distillation}
+% \label{sec:fitnets}
+
+\section{Methodology}
+\label{sec:method}
+
+\paragraph{Dataset.}
+We conduct all experiments on CIFAR-100, a standard benchmark for multi-class image classification consisting of 60{,}000 colour images of resolution $32{\times}32$ pixels across $K=100$ classes, split into 50{,}000 training and 10{,}000 test images (500 train and 100 test images per class).
+
+\paragraph{Teacher.}
+We use ResNet-110 \citep{he2016deep} as the teacher network. Its depth and structure with skip connections allows it to learn rich inter-class similarity representations on CIFAR-100, making it a strong source of dark knowledge for distillation. The teacher is trained independently from scratch using standard cross-entropy against hard labels until convergence, and its weights are then frozen for all subsequent distillation experiments.
+
+\paragraph{Student.}
+We use ResNet-20 \citep{he2016deep} as the student network, which contains approximately 0.27 million parameters, a reduction of $6.3\times$ relative to the teacher. ResNet-20 is architecturally homogeneous with ResNet-110 (same residual blocks, same input resolution), which isolates depth as the sole variable differentiating teacher from student.
+
+\subsection{Baseline: Standard Cross-Entropy Training}
+\label{sec:baseline}
+To establish a reference point, we train ResNet-20 independently from scratch on CIFAR-100 using the standard CCE loss of Eq.~\eqref{eq:cce} against one-hot hard labels, with no teacher supervision. The test accuracy of this baseline directly quantifies how much accuracy is lost by moving from the 110-layer teacher to the 20-layer student, providing the lower bound against which all distillation results are compared.
+
+\paragraph{Student variants.}
+To study the accuracy gap as a function of student capacity, we define two families of student networks. For the \textit{depth} study, we use ResNet-$d$ for $d \in \{20, 32, 44, 56\}$, all with base channel width 16. For the \textit{width} study, we use ResNet-20 with channel multiplier $w \in \{0.5, 1, 2\}$, corresponding to base channels $\{8, 16, 32\}$. The ResNet-20 with $w=1$ serves as the pivot point shared by both studies and is the architecture for which the baseline in Section~\ref{sec:baseline} was trained.
+% \subsection{Response-Based Distillation}
+% \label{sec:kd_hinton}
+% % \subsection{Feature-Based Distillation}
+% % \label{sec:kd_fitnets}
+\subsection{Training Configuration}
+\label{sec:training_config}
+The baseline student is trained under the configuration given in Table~\ref{tab:hyperparams}. The same configuration will be reused for the teacher and the distilled student to ensure all comparisons are controlled.
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Training configuration for the student baseline.} Teacher and distillation runs will follow the same configuration unless otherwise noted.\\}
+  \label{tab:hyperparams}
+  \begin{tabular}{lc}
+    \toprule
+    \textbf{Hyperparameter} & \textbf{Value} \\
+    \midrule
+    Model                & ResNet-20 (width 16) \\
+    Optimiser            & SGD + Momentum \\
+    Momentum             & 0.9 \\
+    Initial LR           & 0.1 \\
+    LR schedule          & MultiStep \\
+    LR decay milestones  & epochs 60, 80 \\
+    LR decay factor $\gamma$ & 0.1 \\
+    Weight decay         & $5\times10^{-4}$ \\
+    Batch size           & 128 \\
+    Epochs               & 100 \\
+    Loss                 & Cross-entropy \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Current Progress}
+\label{sec:progress}
+We have completed the student baseline: ResNet-20 trained from scratch on CIFAR-100 under the configuration in Table~\ref{tab:hyperparams}, with no teacher supervision. Training ran for 100 epochs with MultiStep LR decay at epochs 60 and 80. Figure~\ref{fig:baseline} shows the Top-1 and Top-5 accuracy curves for both train and test sets. The two sharp upward jumps at epochs 60 and 80 correspond to the LR decay milestones. Table~\ref{tab:baseline} summarises the best checkpoint metrics.
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\columnwidth]{imgs/baseline training.jpeg}
+  \caption{
+    \textbf{Baseline ResNet-20 training curves on CIFAR-100.}
+    Top-1 and Top-5 accuracy for train and test sets over 100 epochs.
+    LR is decayed by $\gamma=0.1$ at epochs 60 and 80, producing the 
+    visible accuracy jumps.
+  }
+  \label{fig:baseline}
+\end{figure}
+\begin{table}[ht]
+  \centering
+  \caption{
+    \textbf{Best-checkpoint metrics for the student baseline.} Best epoch determined by highest Test Top-1 accuracy.\\}
+  \label{tab:baseline}
+  \begin{tabular}{lc}
+    \toprule
+    \textbf{Metric} & \textbf{Value} \\
+    \midrule
+    Best Epoch          & 89    \\
+    Test Top-1          & 67.63\% \\
+    Test Top-5          & 91.31\% \\
+    Train Top-1         & 80.11\% \\
+    Train Top-5         & 96.74\% \\
+    Train Loss          & 0.6754  \\
+    Test Loss           & 1.1439  \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+The $\approx$12.5\% point gap between Train Top-1 (80.11\%) and Test Top-1 (67.63\%) indicates mild overfitting and establishes the lower bound that distillation must beat. The teacher ceiling (ResNet-110, to be trained in Step 1 below) and all distilled students will be evaluated against this baseline.
+
+\section{Future Plan}
+\label{sec:future}
+The remaining work that will be completed by the final report includes the following sequential steps.
+
+\paragraph{Step 1: Teacher training.}
+We will train ResNet-110 on CIFAR-100 under the same configuration as the baseline. Once training converges, the teacher weights will be frozen and saved as a fixed checkpoint.
+
+\paragraph{Step 2: Hyperparameter ablation.}
+Using the frozen teacher model, we will implement the combined distillation objective of Eq.~\eqref{eq:lkd} and train ResNet-20 as the student. We will then conduct orthogonal ablations to 
+isolate the independent effect of each hyperparameter on Eq.~\eqref{eq:lkd}. 
+
+\textit{Temperature ablation.} We fix $\alpha = 0.5$ and sweep $\tau \in \{2, 4, 8, 16\}$, training ResNet-20 (width 16) under each configuration. This isolates the effect of distribution softening on dark knowledge transfer.
+
+\textit{Weighting ablation.} Using the optimal $\tau^*$ identified above, we sweep $\alpha \in \{0.1, 0.5, 0.9\}$. This isolates the trade-off between ground-truth supervision  and teacher imitation.
+
+\paragraph{Step 3: Architectural scaling.}
+We measure the student-teacher accuracy gap as a function of student capacity. Using the optimal $(\tau^*, \alpha^*)$ from Step~2, we conduct two sub-studies.
+
+\textit{Depth ablation.} We fix width at $w=1$ (base channels 16) and train students of increasing depth: ResNet-20, ResNet-32, ResNet-44, and ResNet-56, corresponding to $n \in \{3, 5, 7, 9\}$ residual blocks and parameter counts ranging from $\approx$0.27M to $\approx$0.85M.
+
+\textit{Width ablation.} We fix depth at 20 layers and vary the channel multiplier $w \in \{0.5, 1, 2\}$, giving base channel counts of 8, 16, and 32 respectively.
+
+Together, these runs will produce a 2D accuracy map quantifying the bias-variance-efficiency tradeoff as a function of student architecture.
+
+\paragraph{Step 4: Analysis and write-up.}
+Beyond accuracy metrics, we will analyse the distributions that the teacher transfers. For a held-out set of images, we will plot the teacher's soft probability distribution over the top-$k$ predicted classes alongside the distributions of (a) the hard-label student baseline and (b) the distilled student. This will help us analyze visually and quantitatively the \emph{dark knowledge} transferred from the teacher to the student. We will also incorporate feature-based distillation 
+
+% demonstrate that the distilled student assigns meaningful probability mass to semantically similar classes in a manner consistent with the teacher, whereas the hard-label student collapses all non-target probabilities toward zero — directly evidencing the role of dark knowledge in improving generalisation.
+% \section{Results}
+% \label{sec:results}
+% \section{Ablation Studies}
+% \label{sec:ablations
+\bibliography{references}
+\bibliographystyle{icml2025}
+
+\end{document}

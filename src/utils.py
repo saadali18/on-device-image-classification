@@ -43,7 +43,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     running_loss = 0.0
     top1_sum = top5_sum = total = 0
 
-    for inputs, labels in tqdm(loader, desc="Train", leave=False):
+    for inputs, labels in tqdm(loader, desc="Train", leave=True):
         inputs, labels = inputs.to(device), labels.to(device)
 
         optimizer.zero_grad()
@@ -77,7 +77,7 @@ def evaluate(model, loader, criterion, device):
     top1_sum = top5_sum = total = 0
 
     with torch.no_grad():
-        for inputs, labels in tqdm(loader, desc="Eval ", leave=False):
+        for inputs, labels in tqdm(loader, desc="Eval ", leave=True):
             inputs, labels = inputs.to(device), labels.to(device)
 
             outputs = model(inputs)
