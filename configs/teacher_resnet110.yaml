@@ -1,0 +1,36 @@
+experiment_name: teacher_resnet110_cifar100
+
+seed: 42
+
+device: auto
+
+dataset:
+  name: cifar100
+  data_dir: ./data
+  num_classes: 100
+  num_workers: 0
+
+model:
+  name: resnet110
+  width: 16
+
+training:
+  epochs: 160
+  batch_size: 128
+  optimizer: sgd
+  learning_rate: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+
+scheduler:
+  name: multistep
+  milestones: [80, 120]
+  gamma: 0.1
+
+loss:
+  name: cross_entropy
+
+output:
+  checkpoint_dir: ./checkpoints/teacher/resnet110
+  result_dir: ./results/teacher/resnet110
+  plot_dir: ./plots/teacher/resnet110

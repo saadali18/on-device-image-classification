@@ -1,0 +1,11 @@
+{
+    "experiment_name": "baseline_resnet20_cifar100",
+    "model": "resnet20",
+    "width": 16,
+    "num_parameters": 278324,
+    "best_test_top1": 67.63,
+    "best_epoch": 89,
+    "epochs": 100,
+    "loss": "cross_entropy",
+    "training_type": "hard_labels_only"
+}
