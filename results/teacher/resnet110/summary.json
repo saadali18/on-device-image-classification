@@ -1,0 +1,11 @@
+{
+    "experiment_name": "teacher_resnet110_cifar100",
+    "model": "resnet110",
+    "width": 16,
+    "num_parameters": 1736564,
+    "best_test_top1": 73.48,
+    "best_epoch": 129,
+    "epochs": 160,
+    "loss": "cross_entropy",
+    "training_type": "teacher_hard_labels_only"
+}
