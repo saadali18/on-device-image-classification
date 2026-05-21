@@ -20,53 +20,86 @@ logits — and conducts a systematic study of:
 
 ```
 on-device-image-classification/
-├── src/                        # All importable Python source modules
-│   ├── resnet_cifar.py         # ResNet-{20,32,44,56,110} CIFAR architectures
-│   ├── train_teacher.py        # End-to-end teacher training script
-│   └── utils.py                # Shared helpers (train_one_epoch, evaluate, topk_accuracy)
+├── configs/                        # YAML hyperparameter configs (one per experiment)
+│   ├── baseline_resnet20.yaml
+│   └── teacher_resnet110.yaml
 │
-├── notebooks/                  # Exploratory / interactive Jupyter notebooks
-│   └── 01_train_teacher.ipynb  # Notebook version of the teacher training pipeline
+├── datasets/                       # Data loading
+│   └── cifar100.py
 │
-├── weights/                    # Saved model checkpoints (not committed to git by default)
-│   └── teacher/
-│       └── resnet110_best.pth  # Best teacher checkpoint (by Test Top-1)
+├── models/                         # Model definitions
+│   └── resnet_cifar.py             # ResNet-{20,32,56,110} + build_resnet_cifar() factory
 │
-├── logs/                       # Per-epoch CSV logs produced during training
-│   └── teacher_train_log.csv   # Loss + Top-1/Top-5 metrics for the teacher run
+├── trainers/                       # Training loop classes (one per training type)
+│   ├── baseline_trainer.py         # Hard-label CE only
+│   └── teacher_trainer.py          # Hard-label CE only (large model)
 │
-├── figs/                       # Generated plots and figures
-│   └── teacher_training_curve.png
+├── scripts/                        # Entry points — `python scripts/<name>.py`
+│   ├── train_baseline.py
+│   ├── train_teacher.py
+│   ├── plot_baseline_metrics.py
+│   └── plot_teacher_metrics.py
 │
-├── paper/                      # ICML-formatted LaTeX report
+├── utils/                          # Shared helpers
+│   ├── metrics.py                  # topk_accuracy
+│   ├── checkpoint.py               # save_checkpoint / load_checkpoint
+│   ├── seed.py                     # set_seed
+│   └── logger.py
+│
+├── checkpoints/<stage>/<arch>/     # Trained model checkpoints
+│   └── best.pth
+│
+├── results/<stage>/<arch>/         # Per-epoch CSV + summary JSON
+│   ├── metrics.csv
+│   └── summary.json
+│
+├── plots/<stage>/<arch>/           # Generated training curves
+│
+├── paper/                          # ICML-formatted LaTeX report
 │   ├── report.tex
 │   ├── references.bib
-│   ├── icml2025.sty / .bst
-│   ├── fancyhdr.sty
-│   └── imgs/                   # Figures embedded in the paper
+│   ├── icml2025.sty / .bst, fancyhdr.sty
+│   └── imgs/
 │
+├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## Where to Put Each New Script
+## Reproducing Existing Results
 
-Use the table below as the **canonical placement guide** whenever you add a new file.
+```bash
+pip install -r requirements.txt
 
-| What you are adding | Correct location | Naming convention |
-|---|---|---|
-| Distillation training loop | `src/` | `train_student.py` (or `train_distill_<variant>.py`) |
-| Shared helpers / loss functions | `src/` | add to `utils.py` **or** create `losses.py` |
-| One-off exploration / analysis | `notebooks/` | `NN_<short_description>.ipynb` (numbered in order) |
-| Saved model checkpoint | `weights/<stage>/` | `<arch>_best.pth` / `<arch>_epoch<N>.pth` |
-| Training log (CSV) | `logs/` | `<stage>_train_log.csv` e.g. `student_train_log.csv` |
-| Plot / figure output | `figs/` | `<descriptive_name>.png` |
-| LaTeX source / paper edits | `paper/` | keep all `.tex`, `.bib`, `.sty` here |
-| Figures used *inside* the paper | `paper/imgs/` | match filename to `\includegraphics{}` call |
+# Train baseline ResNet-20 (hard labels only)
+python scripts/train_baseline.py
+
+# Train teacher ResNet-110 (hard labels only)
+python scripts/train_teacher.py
+
+# Plot curves
+python scripts/plot_baseline_metrics.py
+python scripts/plot_teacher_metrics.py
+```
+
+Hyperparameters are read from `configs/<experiment>.yaml`. Outputs go to
+`checkpoints/`, `results/`, and `plots/` under matching subpaths.
 
 ---
 
+## Current Results
+
+| Stage | Model | Params | Test Top-1 | Test Top-5 | Best Epoch | Config |
+|---|---|---|---|---|---|---|
+| Baseline (hard labels) | ResNet-20 (w=1) | 278,324 | **67.63%** | 91.31% | 89 / 100 | `configs/baseline_resnet20.yaml` |
+| Teacher (hard labels) | ResNet-110 (w=1) | 1,736,564 | **73.48%** | 92.56% | 129 / 160 | `configs/teacher_resnet110.yaml` |
+
+> **Note on teacher config drift**: the report's Table 1 specifies 100 epochs / milestones [60, 80] for *all* runs.
+> The committed teacher was actually trained for 160 epochs / milestones [80, 120].
+> Decision deferred — either retrain teacher under the report's config or update Table 1 in the final report.
+
+---
 
 ## Project Roadmap
 
@@ -74,90 +107,32 @@ Use the table below as the **canonical placement guide** whenever you add a new 
 - [x] Teacher: ResNet-110 trained on CIFAR-100
 - [ ] Implement Hinton et al. distillation loss (KL divergence + hard-label CE + τ² scaling)
 - [ ] Step 2a — Temperature ablation: fix α=0.5, sweep τ ∈ {2, 4, 8, 16}
-- [ ] Step 2b — Weighting ablation: fix τ=τ*, sweep α ∈ {0.1, 0.5, 0.9}
-- [ ] Step 3a — Depth ablation: ResNet-{20, 32, 44, 56} at optimal (τ*, α*)
-- [ ] Step 3b — Width ablation: ResNet-20 at w ∈ {0.5, 1, 2} at optimal (τ*, α*)
-- [ ] Step 4 — Dark knowledge analysis: plot soft probability distributions (teacher vs. distilled student vs. hard-label student)
+- [ ] Step 2b — Weighting ablation: fix τ=τ\*, sweep α ∈ {0.1, 0.5, 0.9}
+- [ ] Step 3a — Depth ablation: ResNet-{20, 32, 44, 56} at optimal (τ\*, α\*)
+- [ ] Step 3b — Width ablation: ResNet-20 at w ∈ {0.5, 1, 2} at optimal (τ\*, α\*)
+- [ ] Step 4 — Dark knowledge analysis: soft-probability distributions (teacher vs. distilled student vs. hard-label student)
 - [ ] Final report write-up (ICML format, 4–6 pages)
 
 ---
 
+## Adding a New Experiment
 
-## Models (`src/resnet_cifar.py`)
+When implementing distillation (Step 2 onwards), follow the existing pattern:
 
-All teacher and student architectures are defined in a single file using the
-He et al. CIFAR ResNet family: total layers = 6n + 2, with n blocks per stage.
+| What you are adding | Where it goes |
+|---|---|
+| New trainer (e.g. `DistillationTrainer`) | `trainers/distillation_trainer.py` |
+| New entry point | `scripts/train_distillation.py` |
+| Hyperparameter config | `configs/distillation_<variant>.yaml` (e.g. `distillation_tau4_alpha0p5.yaml`) |
+| Loss function | `utils/losses.py` (create if absent) |
+| Checkpoint | `checkpoints/distillation/<variant>/best.pth` |
+| Per-epoch CSV + summary | `results/distillation/<variant>/` |
+| Curves | `plots/distillation/<variant>/` |
 
-### Currently defined
-
-| Function | n | Layers | Params | Use |
-|---|---|---|---|---|
-| `resnet110(num_classes=100)` | 18 | 110 | ~1.73M | Teacher |
-
-### Adding student variants (Step 2 onwards)
-
-Add the following constructor functions to the bottom of `resnet_cifar.py`:
-
-```python
-def resnet20(num_classes=100):
-    """ResNet-20: n=3, ~0.27M params. Primary student."""
-    return ResNet(BasicBlock, [3, 3, 3], num_classes=num_classes)
-
-def resnet32(num_classes=100):
-    """ResNet-32: n=5, ~0.46M params. Depth ablation."""
-    return ResNet(BasicBlock, [5, 5, 5], num_classes=num_classes)
-
-def resnet44(num_classes=100):
-    """ResNet-44: n=7, ~0.66M params. Depth ablation."""
-    return ResNet(BasicBlock, [7, 7, 7], num_classes=num_classes)
-
-def resnet56(num_classes=100):
-    """ResNet-56: n=9, ~0.85M params. Depth ablation."""
-    return ResNet(BasicBlock, [9, 9, 9], num_classes=num_classes)
-```
-
-### Width variants (Step 3 — width ablation)
-
-The `ResNet` class does not yet support a width multiplier. Add a `width`
-parameter to the constructor:
-
-```python
-# Change the ResNet.__init__ signature from:
-def __init__(self, block, num_blocks, num_classes=100):
-    ...
-    self.in_planes = 16
-    self.conv1 = nn.Conv2d(3, 16, ...)
-    self.layer1 = self._make_layer(block, 16,  num_blocks[0], stride=1)
-    self.layer2 = self._make_layer(block, 32,  num_blocks[1], stride=2)
-    self.layer3 = self._make_layer(block, 64,  num_blocks[2], stride=2)
-    self.fc = nn.Linear(64, num_classes)
-
-# To:
-def __init__(self, block, num_blocks, num_classes=100, width=1):
-    ...
-    base = max(1, int(16 * width))
-    self.in_planes = base
-    self.conv1 = nn.Conv2d(3, base, ...)
-    self.layer1 = self._make_layer(block, base,     num_blocks[0], stride=1)
-    self.layer2 = self._make_layer(block, base * 2, num_blocks[1], stride=2)
-    self.layer3 = self._make_layer(block, base * 4, num_blocks[2], stride=2)
-    self.fc = nn.Linear(base * 4, num_classes)
-```
-
-Then update the constructors to pass `width` through:
-
-```python
-def resnet20(num_classes=100, width=1):
-    return ResNet(BasicBlock, [3, 3, 3], num_classes=num_classes, width=width)
-```
-
-Width multiplier reference:
-
-| `width` | Base channels | Approx params (ResNet-20) |
-|---|---|---|
-| 0.5 | 8 | ~0.07M |
-| 1 | 16 | ~0.27M |
-| 2 | 32 | ~1.07M |
+The `BaselineTrainer` class is the closest template — most of the distillation
+trainer will reuse its `train_one_epoch` / `evaluate` / `fit` skeleton, with
+the loss term swapped for the combined hard + soft objective and the frozen
+teacher passed in at construction.
 
 ---
 
