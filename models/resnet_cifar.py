@@ -149,6 +149,15 @@ def resnet32(num_classes: int = 100, width: int = 16):
     )
 
 
+def resnet44(num_classes: int = 100, width: int = 16):
+    return ResNetCIFAR(
+        block=BasicBlock,
+        num_blocks=[7, 7, 7],
+        num_classes=num_classes,
+        width=width,
+    )
+
+
 def resnet56(num_classes: int = 100, width: int = 16):
     return ResNetCIFAR(
         block=BasicBlock,
@@ -175,6 +184,9 @@ def build_resnet_cifar(model_name: str, num_classes: int = 100, width: int = 16)
 
     if model_name == "resnet32":
         return resnet32(num_classes=num_classes, width=width)
+
+    if model_name == "resnet44":
+        return resnet44(num_classes=num_classes, width=width)
 
     if model_name == "resnet56":
         return resnet56(num_classes=num_classes, width=width)

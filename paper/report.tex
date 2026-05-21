@@ -47,16 +47,18 @@
 
 \icmlaffiliation{lums}{Department of Electrical Engineering, Lahore University of Management Sciences, Lahore, Pakistan}
 
-\icmlcorrespondingauthor{name}{email}
+\icmlcorrespondingauthor{Saad Ali}{25280011@lums.edu.pk}
 
 \icmlkeywords{Knowledge Distillation, Model Compression, On-Device Deep Learning, CIFAR-100, ResNet, Temperature Scaling, Ablation Study}
 \vskip 0.3in
 ]
 
+\noindent\textbf{Code:} \url{https://github.com/saadali18/on-device-image-classification}\\
+
 
 % ========================================================================
 \begin{abstract}
-Deploying accurate image classifiers on resource-constrained edge devices requires compact models that preserve most of a large model's accuracy. We study response-based knowledge distillation \citep{hinton2015distilling} as a principled compression strategy on CIFAR-100, using a pretrained ResNet-110 teacher to supervise a ResNet-20 student ($6.3\times$ parameter reduction) via a combined hard-label cross-entropy and temperature-scaled KL divergence objective. We establish a student baseline of \textbf{67.63\%} Test Top-1 accuracy under standard cross-entropy training, providing the lower bound for distillation gains. Remaining work includes teacher training, orthogonal ablations over temperature $\tau$ and loss-weighting $\alpha$, architectural scaling across student depth and width to characterize the student-teacher accuracy gap, and a distributional analysis of the dark knowledge transferred from teacher to student.
+Deploying accurate image classifiers on resource-constrained edge devices requires compact models that preserve most of a large model's accuracy. We study response-based knowledge distillation \citep{hinton2015distilling} as a principled compression strategy on CIFAR-100, using a pretrained ResNet-110 teacher ($73.48\%$ Test Top-1) to supervise a ResNet-20 student ($6.3\times$ parameter reduction) via a combined hard-label cross-entropy and temperature-scaled KL divergence objective. Against a hard-label ResNet-20 baseline of $67.63\%$ Test Top-1, we conduct orthogonal ablations over temperature $\tau \in \{2, 4, 8, 16\}$ and loss-weighting $\alpha \in \{0.1, 0.5, 0.9\}$, followed by architectural scaling across student depth (ResNet-$\{20, 32, 44, 56\}$) and width ($w \in \{0.5, 1, 2\}$) to characterize the student--teacher accuracy gap as a function of capacity. \textit{[Headline numbers --- best $(\tau^*, \alpha^*)$, peak distilled Top-1, recovered fraction of the teacher gap --- to be inserted after the sweep completes.]} We complement the accuracy study with a distributional analysis of the dark knowledge transferred from teacher to student.
 \end{abstract}
 % ========================================================================
 
@@ -256,7 +258,7 @@ where $\alpha \in [0,1]$ controls the relative weight of hard versus soft superv
 We conduct all experiments on CIFAR-100, a standard benchmark for multi-class image classification consisting of 60{,}000 colour images of resolution $32{\times}32$ pixels across $K=100$ classes, split into 50{,}000 training and 10{,}000 test images (500 train and 100 test images per class).
 
 \paragraph{Teacher.}
-We use ResNet-110 \citep{he2016deep} as the teacher network. Its depth and structure with skip connections allows it to learn rich inter-class similarity representations on CIFAR-100, making it a strong source of dark knowledge for distillation. The teacher is trained independently from scratch using standard cross-entropy against hard labels until convergence, and its weights are then frozen for all subsequent distillation experiments.
+We use ResNet-110 \citep{he2016deep} as the teacher network. Its depth and structure with skip connections allows it to learn rich inter-class similarity representations on CIFAR-100, making it a strong source of dark knowledge for distillation. The teacher is trained independently from scratch using standard cross-entropy against hard labels until convergence, and its weights are then frozen for all subsequent distillation experiments. We use a slightly longer schedule for the teacher than for the students (160 epochs with LR milestones at $\{80, 120\}$) to ensure the teacher converges to a higher accuracy ceiling and provides a stronger source of soft targets for distillation. All other hyperparameters match Table~\ref{tab:hyperparams}.
 
 \paragraph{Student.}
 We use ResNet-20 \citep{he2016deep} as the student network, which contains approximately 0.27 million parameters, a reduction of $6.3\times$ relative to the teacher. ResNet-20 is architecturally homogeneous with ResNet-110 (same residual blocks, same input resolution), which isolates depth as the sole variable differentiating teacher from student.
@@ -297,16 +299,22 @@ The baseline student is trained under the configuration given in Table~\ref{tab:
   \end{tabular}
 \end{table}
 
-\section{Current Progress}
-\label{sec:progress}
-We have completed the student baseline: ResNet-20 trained from scratch on CIFAR-100 under the configuration in Table~\ref{tab:hyperparams}, with no teacher supervision. Training ran for 100 epochs with MultiStep LR decay at epochs 60 and 80. Figure~\ref{fig:baseline} shows the Top-1 and Top-5 accuracy curves for both train and test sets. The two sharp upward jumps at epochs 60 and 80 correspond to the LR decay milestones. Table~\ref{tab:baseline} summarises the best checkpoint metrics.
+% ========================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Baseline and Teacher}
+\label{sec:results_baseline_teacher}
+
+\paragraph{Baseline (ResNet-20, hard labels).}
+Training ResNet-20 from scratch on CIFAR-100 under the configuration in Table~\ref{tab:hyperparams} with no teacher supervision establishes the lower bound that distillation must beat. Figure~\ref{fig:baseline} shows the Top-1 and Top-5 accuracy curves; the two sharp upward jumps at epochs 60 and 80 correspond to the LR decay milestones. The best-checkpoint metrics are summarised in Table~\ref{tab:baseline}. The $\approx$12.5\% point gap between Train Top-1 (80.11\%) and Test Top-1 (67.63\%) indicates mild overfitting.
 \begin{figure}[ht]
   \centering
   \includegraphics[width=\columnwidth]{imgs/baseline training.jpeg}
   \caption{
     \textbf{Baseline ResNet-20 training curves on CIFAR-100.}
     Top-1 and Top-5 accuracy for train and test sets over 100 epochs.
-    LR is decayed by $\gamma=0.1$ at epochs 60 and 80, producing the 
+    LR is decayed by $\gamma=0.1$ at epochs 60 and 80, producing the
     visible accuracy jumps.
   }
   \label{fig:baseline}
@@ -320,7 +328,7 @@ We have completed the student baseline: ResNet-20 trained from scratch on CIFAR-
     \toprule
     \textbf{Metric} & \textbf{Value} \\
     \midrule
-    Best Epoch          & 89    \\
+    Best Epoch          & 89      \\
     Test Top-1          & 67.63\% \\
     Test Top-5          & 91.31\% \\
     Train Top-1         & 80.11\% \\
@@ -330,40 +338,137 @@ We have completed the student baseline: ResNet-20 trained from scratch on CIFAR-
     \bottomrule
   \end{tabular}
 \end{table}
-The $\approx$12.5\% point gap between Train Top-1 (80.11\%) and Test Top-1 (67.63\%) indicates mild overfitting and establishes the lower bound that distillation must beat. The teacher ceiling (ResNet-110, to be trained in Step 1 below) and all distilled students will be evaluated against this baseline.
 
-\section{Future Plan}
-\label{sec:future}
-The remaining work that will be completed by the final report includes the following sequential steps.
+\paragraph{Teacher (ResNet-110).}
+We train the ResNet-110 teacher independently with the longer schedule described in Section~\ref{sec:method}. Final-checkpoint metrics are summarised in Table~\ref{tab:teacher}. The teacher achieves \textbf{73.48\%} Test Top-1, providing the upper accuracy ceiling and the source of soft targets for all subsequent distillation experiments.
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Best-checkpoint metrics for the teacher.} Trained on CIFAR-100 with hard-label cross-entropy for 160 epochs (LR milestones $\{80, 120\}$).\\}
+  \label{tab:teacher}
+  \begin{tabular}{lc}
+    \toprule
+    \textbf{Metric} & \textbf{Value} \\
+    \midrule
+    Architecture        & ResNet-110 \\
+    Parameters          & 1{,}736{,}564 \\
+    Best Epoch          & 129       \\
+    Test Top-1          & 73.48\%   \\
+    Test Top-5          & 92.74\%   \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-\paragraph{Step 1: Teacher training.}
-We will train ResNet-110 on CIFAR-100 under the same configuration as the baseline. Once training converges, the teacher weights will be frozen and saved as a fixed checkpoint.
+The teacher--baseline gap of $73.48 - 67.63 = 5.85$ percentage points defines the headroom available to distillation: a perfect transfer of the teacher's knowledge would recover this entire gap, while no transfer would leave the student at the baseline.
 
-\paragraph{Step 2: Hyperparameter ablation.}
-Using the frozen teacher model, we will implement the combined distillation objective of Eq.~\eqref{eq:lkd} and train ResNet-20 as the student. We will then conduct orthogonal ablations to 
-isolate the independent effect of each hyperparameter on Eq.~\eqref{eq:lkd}. 
+\subsection{Hyperparameter Ablation}
+\label{sec:results_hparam}
 
-\textit{Temperature ablation.} We fix $\alpha = 0.5$ and sweep $\tau \in \{2, 4, 8, 16\}$, training ResNet-20 (width 16) under each configuration. This isolates the effect of distribution softening on dark knowledge transfer.
+\paragraph{Temperature.}
+Fixing the hard-label weight at $\alpha = 0.5$, we sweep the softmax temperature $\tau \in \{2, 4, 8, 16\}$. Higher $\tau$ produces flatter teacher distributions and exposes more inter-class similarity to the student, but at the cost of weaker discriminative signal. Results are reported in Table~\ref{tab:tau_sweep}.
 
-\textit{Weighting ablation.} Using the optimal $\tau^*$ identified above, we sweep $\alpha \in \{0.1, 0.5, 0.9\}$. This isolates the trade-off between ground-truth supervision  and teacher imitation.
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Temperature ablation} ($\alpha=0.5$, ResNet-20 student, 100 epochs). \textit{[Numbers to be inserted after sweep completes.]}}
+  \label{tab:tau_sweep}
+  \begin{tabular}{ccc}
+    \toprule
+    $\tau$ & Test Top-1 & $\Delta$ vs.\ baseline \\
+    \midrule
+    2  & --.--\% & +--.-- \\
+    4  & --.--\% & +--.-- \\
+    8  & --.--\% & +--.-- \\
+    16 & --.--\% & +--.-- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-\paragraph{Step 3: Architectural scaling.}
-We measure the student-teacher accuracy gap as a function of student capacity. Using the optimal $(\tau^*, \alpha^*)$ from Step~2, we conduct two sub-studies.
+\paragraph{Loss weighting.}
+Using the best temperature $\tau^*$ from above, we sweep $\alpha \in \{0.1, 0.5, 0.9\}$, where larger $\alpha$ places more weight on the hard-label cross-entropy term. Results are reported in Table~\ref{tab:alpha_sweep}.
 
-\textit{Depth ablation.} We fix width at $w=1$ (base channels 16) and train students of increasing depth: ResNet-20, ResNet-32, ResNet-44, and ResNet-56, corresponding to $n \in \{3, 5, 7, 9\}$ residual blocks and parameter counts ranging from $\approx$0.27M to $\approx$0.85M.
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Loss-weighting ablation} ($\tau = \tau^*$, ResNet-20 student, 100 epochs). \textit{[Numbers to be inserted.]}}
+  \label{tab:alpha_sweep}
+  \begin{tabular}{ccc}
+    \toprule
+    $\alpha$ & Test Top-1 & $\Delta$ vs.\ baseline \\
+    \midrule
+    0.1 & --.--\% & +--.-- \\
+    0.5 & --.--\% & +--.-- \\
+    0.9 & --.--\% & +--.-- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-\textit{Width ablation.} We fix depth at 20 layers and vary the channel multiplier $w \in \{0.5, 1, 2\}$, giving base channel counts of 8, 16, and 32 respectively.
+\subsection{Architectural Scaling}
+\label{sec:results_arch}
 
-Together, these runs will produce a 2D accuracy map quantifying the bias-variance-efficiency tradeoff as a function of student architecture.
+Using the optimal $(\tau^*, \alpha^*)$ identified above, we measure how the distillation benefit varies with student capacity along two axes.
 
-\paragraph{Step 4: Analysis and write-up.}
-Beyond accuracy metrics, we will analyse the distributions that the teacher transfers. For a held-out set of images, we will plot the teacher's soft probability distribution over the top-$k$ predicted classes alongside the distributions of (a) the hard-label student baseline and (b) the distilled student. This will help us analyze visually and quantitatively the \emph{dark knowledge} transferred from the teacher to the student. We will also incorporate feature-based distillation 
+\paragraph{Depth.}
+Fixing width $w=1$ (base channels 16), we sweep ResNet-$d$ for $d \in \{20, 32, 44, 56\}$ ($n \in \{3, 5, 7, 9\}$ residual blocks per stage). Results are reported in Table~\ref{tab:depth_sweep}.
 
-% demonstrate that the distilled student assigns meaningful probability mass to semantically similar classes in a manner consistent with the teacher, whereas the hard-label student collapses all non-target probabilities toward zero — directly evidencing the role of dark knowledge in improving generalisation.
-% \section{Results}
-% \label{sec:results}
-% \section{Ablation Studies}
-% \label{sec:ablations
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Depth ablation} ($\tau = \tau^*$, $\alpha = \alpha^*$, 100 epochs). \textit{[Numbers to be inserted.]}}
+  \label{tab:depth_sweep}
+  \begin{tabular}{lccc}
+    \toprule
+    Student & Params & Test Top-1 & $\Delta$ vs.\ baseline \\
+    \midrule
+    ResNet-20 & 278{,}324 & --.--\% & +--.-- \\
+    ResNet-32 & 472{,}756 & --.--\% & +--.-- \\
+    ResNet-44 & 667{,}188 & --.--\% & +--.-- \\
+    ResNet-56 & 861{,}620 & --.--\% & +--.-- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Width.}
+Fixing depth at 20 layers, we sweep channel multiplier $w \in \{0.5, 1, 2\}$ (base channels 8, 16, 32). Results are reported in Table~\ref{tab:width_sweep}.
+
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Width ablation} (ResNet-20, $\tau = \tau^*$, $\alpha = \alpha^*$, 100 epochs). \textit{[Numbers to be inserted.]}}
+  \label{tab:width_sweep}
+  \begin{tabular}{cccc}
+    \toprule
+    $w$ & Params & Test Top-1 & $\Delta$ vs.\ baseline \\
+    \midrule
+    0.5 & --- & --.--\% & +--.-- \\
+    1.0 & 278{,}324 & --.--\% & +--.-- \\
+    2.0 & --- & --.--\% & +--.-- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ========================================================================
+\section{Dark Knowledge Analysis}
+\label{sec:dark_knowledge}
+\textit{[To be written once the best distilled checkpoint exists. Plan: include the per-image bar-plot figure produced by \texttt{scripts/plot\_dark\_knowledge.py} showing teacher softmax at $T=1$ and $T=\tau^*$ alongside the hard-label and distilled student distributions. The qualitative claim is that the distilled student's distribution lies closer to the temperature-softened teacher than to the hard-label baseline does, providing direct evidence for the role of dark knowledge in the observed accuracy gain.]}
+
+% ========================================================================
+\section{Calibration Analysis}
+\label{sec:calibration}
+\textit{[Optional extension. Plan: report Expected Calibration Error (ECE) for teacher, hard-label baseline, and the best distilled student using 15 confidence bins, accompanied by reliability diagrams. Preliminary observation: the teacher is overconfident (ECE 12.54\%, mean max-prob 0.86), the hard-label student is comparatively well-calibrated (ECE 6.23\%, mean max-prob 0.74), and we will measure whether distillation inherits the teacher's overconfidence.]}
+
+% ========================================================================
+\section{Discussion}
+\label{sec:discussion}
+\textit{[To be written after results are in. Planned threads: (i) the $\tau$ sweep traces an inverted-U as predicted by theory --- $\tau{=}1$ collapses to hard labels and $\tau \to \infty$ over-smooths toward uniform; (ii) the depth ablation tests the ``middle wins'' capacity-gap hypothesis from \citet{cho2019efficacy}; (iii) the width sweep complements depth as an orthogonal capacity axis; (iv) the dark-knowledge figure provides a direct mechanism for the observed gains.]}
+
+% ========================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+\textit{[To be written last. Planned headline claims (placeholders to be replaced with measured numbers):
+(1) Distillation recovers --- pp of the 5.85 pp teacher--baseline gap at zero parameter cost;
+(2) optimal hyperparameters are $\tau^* = ---$ and $\alpha^* = ---$, consistent with values reported in the literature;
+(3) ablations confirm theoretical predictions on capacity-gap behaviour and the role of temperature.]}
+
+% ========================================================================
+\section*{Statement on the Use of AI Tools}
+AI coding assistants (Claude Code) were used by the team for software scaffolding (organising the trainer / data / model module structure under the existing codebase conventions), debugging environmental issues (Python SSL handling on macOS, MPS device selection), generating boilerplate plotting code, and producing structural drafts of this report. All experimental design --- choice of ablation grid, choice of architectures, choice of evaluation metrics --- as well as all interpretation of results were made by the team. The mathematical derivations in Section~\ref{sec:method} (in particular the $\tau^2$ scaling factor proof) were written and verified by the team without AI assistance. All trained checkpoints were produced by the team's own training runs; no pretrained weights were imported from external sources.
+
 \bibliography{references}
 \bibliographystyle{icml2025}
 
