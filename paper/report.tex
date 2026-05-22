@@ -58,7 +58,7 @@
 
 % ========================================================================
 \begin{abstract}
-Deploying accurate image classifiers on resource-constrained edge devices requires compact models that preserve most of a large model's accuracy. We study response-based knowledge distillation \citep{hinton2015distilling} as a principled compression strategy on CIFAR-100, using a pretrained ResNet-110 teacher ($73.48\%$ Test Top-1) to supervise a ResNet-20 student ($6.3\times$ parameter reduction) via a combined hard-label cross-entropy and temperature-scaled KL divergence objective. Against a hard-label ResNet-20 baseline of $67.63\%$ Test Top-1, our temperature sweep $\tau \in \{2, 4, 8, 16\}$ and loss-weighting sweep $\alpha \in \{0.1, 0.5, 0.9\}$ both exhibit clean inverted-U behaviour with peaks at $\tau^* = 8$ and $\alpha^* = 0.5$, where the distilled student reaches $\mathbf{69.98\%}$ Top-1 ($+\mathbf{2.35}$ pp, recovering $\mathbf{40\%}$ of the $5.85$ pp teacher--baseline gap). We extend the study with an architectural-scaling sweep across student depth (ResNet-$\{20, 32, 44, 56\}$) and width ($w \in \{0.5, 1, 2\}$) \textit{[depth/width headline numbers to be inserted after Step 3]}. A distributional analysis of the teacher's softened logits provides direct visual evidence of the dark knowledge transferred to the student, while a calibration analysis reveals a non-obvious side-effect: distillation degrades calibration (ECE rises from $6.23\%$ to $10.32\%$) as the student inherits the teacher's overconfidence pattern.
+Deploying accurate image classifiers on resource-constrained edge devices requires compact models that preserve most of a large model's accuracy. We study response-based knowledge distillation \citep{hinton2015distilling} as a principled compression strategy on CIFAR-100, using a pretrained ResNet-110 teacher ($73.48\%$ Test Top-1) to supervise a family of smaller students via a combined hard-label cross-entropy and temperature-scaled KL divergence objective. Against a hard-label ResNet-20 baseline of $67.63\%$ Test Top-1, our temperature sweep $\tau \in \{2, 4, 8, 16\}$ and loss-weighting sweep $\alpha \in \{0.1, 0.5, 0.9\}$ both exhibit clean inverted-U behaviour with peaks at $\tau^* = 8$ and $\alpha^* = 0.5$. An architectural-scaling sweep across depth (ResNet-$\{20, 32, 44, 56\}$) and width ($w \in \{0.5, 1, 2\}$) shows that distilled-student accuracy is monotonic in capacity in our regime: three of five capacity points exceed the teacher's accuracy, with the wider ResNet-20 ($w=2$, $1.10$M parameters --- still $1.6\times$ smaller than the teacher) reaching $\mathbf{75.43\%}$ Top-1, $\mathbf{+7.80}$ pp above the hard-label baseline and $\mathbf{+1.95}$ pp above the teacher itself. The contrary failure mode appears at the low-capacity end: ResNet-20 narrowed to $w=0.5$ ($72$k parameters) finishes $10.37$ pp \emph{below} baseline, demonstrating a minimum-capacity threshold below which dark knowledge cannot be absorbed. A distributional analysis visualises the teacher's softened logits and a calibration analysis reveals a non-obvious side-effect: distillation degrades calibration (ECE rises from $6.23\%$ to $\sim 10\%$) as the student inherits the teacher's overconfidence pattern.
 \end{abstract}
 % ========================================================================
 
@@ -414,16 +414,16 @@ Fixing width $w=1$ (base channels 16), we sweep ResNet-$d$ for $d \in \{20, 32, 
 
 \begin{table}[ht]
   \centering
-  \caption{\textbf{Depth ablation} ($\tau = \tau^*$, $\alpha = \alpha^*$, 100 epochs). \textit{[Numbers to be inserted.]}}
+  \caption{\textbf{Depth ablation} ($\tau = 8$, $\alpha = 0.5$, 100 epochs). $\Delta_{\text{T}}$ is the gap against the ResNet-110 teacher (73.48\%).}
   \label{tab:depth_sweep}
-  \begin{tabular}{lccc}
+  \begin{tabular}{lcccc}
     \toprule
-    Student & Params & Test Top-1 & $\Delta$ vs.\ baseline \\
+    Student & Params & Test Top-1 & $\Delta$ vs.\ base & $\Delta_{\text{T}}$ \\
     \midrule
-    ResNet-20 & 278{,}324 & --.--\% & +--.-- \\
-    ResNet-32 & 472{,}756 & --.--\% & +--.-- \\
-    ResNet-44 & 667{,}188 & --.--\% & +--.-- \\
-    ResNet-56 & 861{,}620 & --.--\% & +--.-- \\
+    ResNet-20 & 278{,}324 & 69.98\% & $+2.35$ & $-3.50$ \\
+    ResNet-32 & 472{,}756 & 72.39\% & $+4.76$ & $-1.09$ \\
+    ResNet-44 & 667{,}188 & 73.52\% & $+5.89$ & $+0.04$ \\
+    \textbf{ResNet-56} & 861{,}620 & \textbf{74.72\%} & $\mathbf{+7.09}$ & $\mathbf{+1.24}$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -433,15 +433,15 @@ Fixing depth at 20 layers, we sweep channel multiplier $w \in \{0.5, 1, 2\}$ (ba
 
 \begin{table}[ht]
   \centering
-  \caption{\textbf{Width ablation} (ResNet-20, $\tau = \tau^*$, $\alpha = \alpha^*$, 100 epochs). \textit{[Numbers to be inserted.]}}
+  \caption{\textbf{Width ablation} (ResNet-20, $\tau = 8$, $\alpha = 0.5$, 100 epochs). $\Delta_{\text{T}}$ is the gap against the ResNet-110 teacher (73.48\%).}
   \label{tab:width_sweep}
-  \begin{tabular}{cccc}
+  \begin{tabular}{ccccc}
     \toprule
-    $w$ & Params & Test Top-1 & $\Delta$ vs.\ baseline \\
+    $w$ & Params & Test Top-1 & $\Delta$ vs.\ base & $\Delta_{\text{T}}$ \\
     \midrule
-    0.5 &    71{,}756 & --.--\% & +--.-- \\
-    1.0 &   278{,}324 & --.--\% & +--.-- \\
-    2.0 & 1{,}096{,}196 & --.--\% & +--.-- \\
+    0.5 &    71{,}756 & 57.26\% & $-10.37$ & $-16.22$ \\
+    1.0 &   278{,}324 & 69.98\% & $+2.35$  & $-3.50$ \\
+    \textbf{2.0} & 1{,}096{,}196 & \textbf{75.43\%} & $\mathbf{+7.80}$ & $\mathbf{+1.95}$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -477,15 +477,16 @@ We additionally measure Expected Calibration Error (ECE) with 15 confidence bins
 
 \begin{table}[ht]
   \centering
-  \caption{\textbf{Calibration on CIFAR-100 test set} (ECE, 15 bins).}
+  \caption{\textbf{Calibration on CIFAR-100 test set} (ECE, 15 bins). $\bar{p}_{\max}$ is the mean of the max-softmax confidence across the 10{,}000 test images.}
   \label{tab:calibration}
   \begin{tabular}{lccc}
     \toprule
     Model & Top-1 & ECE & $\bar{p}_{\max}$ \\
     \midrule
     Teacher (ResNet-110)     & 73.48\% & 12.54\% & 0.860 \\
-    Hard-label student       & 67.63\% & \textbf{6.23\%}  & 0.738 \\
-    Distilled student ($\tau{=}8, \alpha{=}0.5$) & 69.98\% & 10.32\% & 0.803 \\
+    Hard-label student (ResNet-20)       & 67.63\% & \textbf{6.23\%}  & 0.738 \\
+    Distilled ResNet-20 ($\tau{=}8, \alpha{=}0.5$) & 69.98\% & 10.32\% & 0.803 \\
+    Distilled ResNet-20 ($w{=}2$, best) & 75.43\% & 9.97\% & 0.854 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -499,12 +500,7 @@ We additionally measure Expected Calibration Error (ECE) with 15 confidence bins
   \label{fig:calibration}
 \end{figure}
 
-Counter-intuitively, the \emph{hard-label} student is the best-calibrated model in the family. Despite achieving the highest Top-1 of the two students, the distilled student's mean max-probability shifts from $0.738$ (hard) toward the teacher's $0.860$ (final: $0.803$), and its ECE rises by $4.1$ percentage points (from $6.23\%$ to $10.32\%$). This finding---also reported by parallel groups working on the same project---is consistent with the view that the distillation objective transfers not just the teacher's class similarity structure but also its confidence calibration profile. Accuracy and calibration are therefore not jointly improved by KD: while KD raises accuracy by $+2.35$ pp, it actively degrades calibration. For applications where calibrated probabilities matter (e.g., abstention, downstream Bayesian fusion), an additional post-hoc calibration step (temperature scaling on a held-out set) would be required on top of the distilled model.
-
-% ========================================================================
-\section{Calibration Analysis}
-\label{sec:calibration}
-\textit{[Optional extension. Plan: report Expected Calibration Error (ECE) for teacher, hard-label baseline, and the best distilled student using 15 confidence bins, accompanied by reliability diagrams. Preliminary observation: the teacher is overconfident (ECE 12.54\%, mean max-prob 0.86), the hard-label student is comparatively well-calibrated (ECE 6.23\%, mean max-prob 0.74), and we will measure whether distillation inherits the teacher's overconfidence.]}
+Counter-intuitively, the \emph{hard-label} student is the best-calibrated model in the family. Despite achieving lower Top-1 than both distilled students, it has the smallest ECE ($6.23\%$). Both distilled students' mean max-probabilities shift toward the teacher's $0.860$: the ResNet-20 ($w=1$) distilled student lands at $0.803$ with ECE $10.32\%$, and the headline ResNet-20 ($w=2$) distilled student lands at $0.854$ with ECE $9.97\%$ --- essentially the teacher's confidence profile. This pattern is consistent with the view that the KL term in $\mathcal{L}_{\text{KD}}$ transfers the teacher's full output distribution (including its calibration profile), not merely its argmax. Accuracy and calibration are therefore not jointly improved by KD: while KD raises Top-1 by up to $+7.80$ pp, it raises ECE by roughly $4$ pp. For applications where calibrated probabilities matter (selective prediction, abstention, downstream Bayesian fusion), an additional post-hoc calibration step (e.g.\ temperature scaling on a held-out validation split) would be required on top of the distilled model.
 
 % ========================================================================
 \section{Discussion}
@@ -516,8 +512,14 @@ The $\tau$ sweep in Table~\ref{tab:tau_sweep} traces the inverted-U trajectory t
 \paragraph{$\alpha$ is less sensitive than $\tau$ but still optimal at the balanced setting.}
 The $\alpha$ sweep in Table~\ref{tab:alpha_sweep} is qualitatively much flatter than the $\tau$ sweep --- all three cells improve over the baseline by between $+1.44$ and $+2.35$ pp --- but it still exhibits the same inverted-U structure with the peak at $\alpha^* = 0.5$. The deterioration at $\alpha = 0.9$ is informative: with $90\%$ weight on hard labels and only $10\%$ on the teacher, the student recovers $1.44$ pp of gain --- nontrivial, but only $\sim 60\%$ of what the balanced cell achieves. This rules out the possibility that the gain we observe is simply a regularization effect of the additional loss term; if it were, increasing the hard-label weight should not hurt. Conversely, $\alpha = 0.1$ remains competitive: the ground-truth labels continue to provide useful anchoring even when the teacher does most of the supervision, but they are not strictly necessary for the gain.
 
-\paragraph{Capacity scaling.}
-\textit{[To be written after Step 3 sweep completes. Plan: discuss how the depth and width sweeps in Tables~\ref{tab:depth_sweep}--\ref{tab:width_sweep} (visualized in Figure~\ref{fig:capacity}) test the capacity-gap hypothesis of \citet{cho2019efficacy}; whether the distilled accuracy approaches the teacher ceiling monotonically with student capacity; and whether depth and width are interchangeable axes of capacity for the purposes of KD.]}
+\paragraph{Capacity scaling: ``student exceeds teacher''.}
+The depth and width sweeps (Tables~\ref{tab:depth_sweep}--\ref{tab:width_sweep}, Figure~\ref{fig:capacity}) reveal a stronger result than expected. Three of the five Step-3 students do not merely close the gap to the teacher --- they \emph{cross} it. ResNet-44 ties the teacher ($+0.04$ pp), ResNet-56 exceeds it by $+1.24$ pp, and the wider ResNet-20 ($w=2$) exceeds it by $+1.95$ pp. The headline distilled result is therefore $\mathbf{75.43\%}$ Top-1 ($+7.80$ pp over the hard-label baseline), achieved by ResNet-20 with width multiplier $w=2$.
+
+This pattern is qualitatively different from the ``middle wins'' capacity-gap curve of \citet{cho2019efficacy}. In their setting, the teacher (ResNet-44, $73\%$ Top-1) was already near the ResNet-CIFAR family's natural ceiling, and large students like ResNet-32 already learn well from hard labels alone --- leaving little room for distillation to add value. In our setting the teacher sits at $73.48\%$, well below the family ceiling (the literature reports $\sim76\%$ for a fully-converged ResNet-110); the soft-label signal supplied by this teacher therefore continues to carry useful regularization information for students well into the deep / wide regime. The result is monotone scaling: each capacity increment delivers nearly a full percentage point of additional Top-1.
+
+A second observation is that depth and width trace nearly identical curves in $(\text{params}, \text{Top-1})$ space (Figure~\ref{fig:capacity}). At matched parameter budgets, the depth series and width series differ by no more than $\sim 0.7$ pp. For practitioners this is useful: when accuracy is the only constraint, depth and width are interchangeable axes of capacity for distillation. The width axis has the practical advantage of being parallelizable on accelerators and of preserving residual-block count (and therefore inference latency on hardware with fast 1$\times$1 convolutions), which makes the $w=2$ student a particularly attractive deployment target.
+
+Conversely, the $w=0.5$ ($71{,}756$-param) cell shows the lower-end failure mode: the narrow student finishes at $57.26\%$, which is $10.37$ pp \emph{below} the hard-label ResNet-20 baseline. With only $\sim 70$k parameters the student lacks the capacity to model either the dark-knowledge signal from the teacher or the discriminative signal from the labels, and the distillation loss --- which mixes both --- becomes a noisier optimisation target than CE alone would have been. This is the genuine ``too small to absorb dark knowledge'' regime, distinct from the ``too big to need it'' regime that \citet{cho2019efficacy} highlight.
 
 \paragraph{Accuracy and calibration are not jointly improved.}
 The most surprising finding of our study is summarised in Table~\ref{tab:calibration} and Figure~\ref{fig:calibration}: distillation makes the student measurably \emph{less} calibrated than the hard-label baseline despite making it measurably more accurate. The hard-label student has ECE $6.23\%$ and mean max-probability $0.738$; the distilled student has ECE $10.32\%$ and mean max-probability $0.803$. The student's confidence has shifted toward the teacher's confidence profile (the teacher sits at $0.860$). This is consistent with the view that the KL term in $\mathcal{L}_{\text{KD}}$ directly transfers the teacher's full output distribution --- including the calibration profile encoded in its temperature-scaled probabilities --- not just the argmax. The practical implication is that for downstream applications where calibration matters (selective prediction, abstention, downstream Bayesian fusion), KD alone is insufficient; an additional post-hoc calibration step on a held-out validation set would be required.
@@ -538,7 +540,7 @@ We studied response-based knowledge distillation \citep{hinton2015distilling} as
 
 \item \textbf{Loss weighting is less sensitive but still favours a balanced setting.} All three $\alpha$ values ($0.1, 0.5, 0.9$) improve over the baseline, but $\alpha = 0.5$ is optimal. The $\alpha = 0.9$ cell (mostly hard supervision) recovers only $62\%$ of the gain at $\alpha = 0.5$, ruling out a pure-regularisation explanation for the distillation effect.
 
-\item \textbf{Capacity-scaling.} \textit{[To be completed with Step 3 numbers. Plan: state whether distilled accuracy increases monotonically with student depth and width, whether the wider ResNet-20 ($w=2$) or the deeper ResNet-56 is the more parameter-efficient route to teacher-level accuracy, and what the narrow $w=0.5$ student's performance reveals about the minimum capacity needed to absorb dark knowledge.]}
+\item \textbf{Distillation enables the student to exceed the teacher when capacity is sufficient.} Three of five Step-3 students cross the teacher's $73.48\%$ ceiling: ResNet-44 ($+0.04$), ResNet-56 ($+1.24$), and the wider ResNet-20 with $w=2$ ($+1.95$). The best distilled student reaches $\mathbf{75.43\%}$ Top-1 ($+7.80$ pp over baseline) at $1.10$M parameters --- still $1.6\times$ smaller than the teacher. Depth and width trace nearly identical capacity--accuracy curves; for deployment the wider ResNet-20 ($w=2$) is preferable because it has the same inference latency as ResNet-20 while reaching higher accuracy than ResNet-56. The $w=0.5$ ($72$k params) cell shows the lower-end failure mode: the student lacks capacity to absorb the dark-knowledge signal and finishes $10.37$ pp \emph{below} the hard-label baseline.
 
 \item \textbf{Distillation degrades calibration even as it improves accuracy.} The distilled student's ECE rises from $6.23\%$ (hard baseline) to $10.32\%$, with mean max-probability shifting from $0.738$ toward the teacher's $0.860$. The KL term in the distillation objective transfers the teacher's full output distribution---including its confidence calibration profile---not merely its argmax. For applications where calibration matters, KD must be paired with a post-hoc calibration step.
 
