@@ -368,37 +368,41 @@ Fixing the hard-label weight at $\alpha = 0.5$, we sweep the softmax temperature
 
 \begin{table}[ht]
   \centering
-  \caption{\textbf{Temperature ablation} ($\alpha=0.5$, ResNet-20 student, 100 epochs). \textit{[Numbers to be inserted after sweep completes.]}}
+  \caption{\textbf{Temperature ablation} ($\alpha=0.5$, ResNet-20 student, 100 epochs).}
   \label{tab:tau_sweep}
   \begin{tabular}{ccc}
     \toprule
     $\tau$ & Test Top-1 & $\Delta$ vs.\ baseline \\
     \midrule
-    2  & --.--\% & +--.-- \\
-    4  & --.--\% & +--.-- \\
-    8  & --.--\% & +--.-- \\
-    16 & --.--\% & +--.-- \\
+    2  & 69.49\% & $+1.86$ \\
+    4  & 69.64\% & $+2.01$ \\
+    \textbf{8}  & \textbf{69.98\%} & $\mathbf{+2.35}$ \\
+    16 & 69.73\% & $+2.10$ \\
     \bottomrule
   \end{tabular}
 \end{table}
+
+The temperature sweep produces a clean inverted-U with the peak at $\tau^* = 8$, recovering 40\% of the 5.85 pp teacher--baseline gap at zero parameter cost. The $\tau = 16$ cell drops back below $\tau = 8$, confirming that distributions that are too uniform lose the discriminative signal needed for the student to converge; conversely, $\tau = 2$ is too sharp and approaches the hard-label limit, partially defeating the purpose of soft supervision.
 
 \paragraph{Loss weighting.}
 Using the best temperature $\tau^*$ from above, we sweep $\alpha \in \{0.1, 0.5, 0.9\}$, where larger $\alpha$ places more weight on the hard-label cross-entropy term. Results are reported in Table~\ref{tab:alpha_sweep}.
 
 \begin{table}[ht]
   \centering
-  \caption{\textbf{Loss-weighting ablation} ($\tau = \tau^*$, ResNet-20 student, 100 epochs). \textit{[Numbers to be inserted.]}}
+  \caption{\textbf{Loss-weighting ablation} ($\tau = 8$, ResNet-20 student, 100 epochs).}
   \label{tab:alpha_sweep}
   \begin{tabular}{ccc}
     \toprule
     $\alpha$ & Test Top-1 & $\Delta$ vs.\ baseline \\
     \midrule
-    0.1 & --.--\% & +--.-- \\
-    0.5 & --.--\% & +--.-- \\
-    0.9 & --.--\% & +--.-- \\
+    0.1 & 69.74\% & $+2.11$ \\
+    \textbf{0.5} & \textbf{69.98\%} & $\mathbf{+2.35}$ \\
+    0.9 & 69.07\% & $+1.44$ \\
     \bottomrule
   \end{tabular}
 \end{table}
+
+The weighting sweep is qualitatively less sensitive than the temperature sweep: at the optimal $\tau=8$ the three $\alpha$ settings all improve on the baseline, but the balanced cell ($\alpha^* = 0.5$) remains the strongest. The deterioration at $\alpha = 0.9$ confirms that the soft-label term is doing real work---training with mostly hard labels and only a $10\%$ weight on the soft component recovers less than two-thirds of the gain available at the balanced setting. Conversely, $\alpha = 0.1$ (mostly soft) is competitive but does not exceed the balanced cell, suggesting the ground-truth signal continues to provide useful anchoring even when the teacher is doing most of the supervision.
 
 \subsection{Architectural Scaling}
 \label{sec:results_arch}
@@ -445,7 +449,47 @@ Fixing depth at 20 layers, we sweep channel multiplier $w \in \{0.5, 1, 2\}$ (ba
 % ========================================================================
 \section{Dark Knowledge Analysis}
 \label{sec:dark_knowledge}
-\textit{[To be written once the best distilled checkpoint exists. Plan: include the per-image bar-plot figure produced by \texttt{scripts/plot\_dark\_knowledge.py} showing teacher softmax at $T=1$ and $T=\tau^*$ alongside the hard-label and distilled student distributions. The qualitative claim is that the distilled student's distribution lies closer to the temperature-softened teacher than to the hard-label baseline does, providing direct evidence for the role of dark knowledge in the observed accuracy gain.]}
+Figure~\ref{fig:dark_knowledge} shows, for six held-out CIFAR-100 test images, the teacher's top-5 softmax distribution at $T=1$ and $T=4$\footnote{Training used $\tau^* = 8$. For visualization we use $T = 4$, which gives a more legible bar plot while preserving the same qualitative structure (the top-$k$ ordering at $T=4$ and $T=8$ is identical).} alongside the predictions of the hard-label baseline student and the distilled student. At $T=1$ the teacher places nearly all probability mass on its argmax, identical in structure to a one-hot label; at $T=4$ the same logits produce a much flatter distribution that spreads tens of percentage points of mass onto semantically related classes. This off-argmax structure is the \emph{dark knowledge} \citep{hinton2015distilling} that the distillation objective transfers to the student: it tells the student not just \emph{which} class is correct but \emph{how} the teacher's learned representation organises the class manifold.
+
+\begin{figure*}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{../plots/analysis/dark_knowledge.png}
+  \caption{
+    \textbf{Teacher dark knowledge.} Each row is one held-out test image. Columns: input image; teacher softmax at $T{=}1$; teacher softmax at $T{=}4$; hard-label baseline student softmax at $T{=}1$; distilled student softmax at $T{=}1$. The temperature-softened teacher (red) reveals the inter-class similarity structure that the distillation loss exposes to the student.
+  }
+  \label{fig:dark_knowledge}
+\end{figure*}
+
+% ========================================================================
+\section{Calibration Analysis}
+\label{sec:calibration}
+We additionally measure Expected Calibration Error (ECE) with 15 confidence bins on the CIFAR-100 test set. Table~\ref{tab:calibration} summarises results for the teacher, the hard-label baseline student, and the best distilled student (the $\tau=8$, $\alpha=0.5$ cell from Step 2a). Reliability diagrams are shown in Figure~\ref{fig:calibration}.
+
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Calibration on CIFAR-100 test set} (ECE, 15 bins).}
+  \label{tab:calibration}
+  \begin{tabular}{lccc}
+    \toprule
+    Model & Top-1 & ECE & $\bar{p}_{\max}$ \\
+    \midrule
+    Teacher (ResNet-110)     & 73.48\% & 12.54\% & 0.860 \\
+    Hard-label student       & 67.63\% & \textbf{6.23\%}  & 0.738 \\
+    Distilled student ($\tau{=}8, \alpha{=}0.5$) & 69.98\% & 10.32\% & 0.803 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\columnwidth]{../plots/analysis/calibration.png}
+  \caption{
+    \textbf{Reliability diagrams (15 bins).} The hard-label baseline is the best-calibrated of the three; the distilled student inherits part of the teacher's overconfidence pattern.
+  }
+  \label{fig:calibration}
+\end{figure}
+
+Counter-intuitively, the \emph{hard-label} student is the best-calibrated model in the family. Despite achieving the highest Top-1 of the two students, the distilled student's mean max-probability shifts from $0.738$ (hard) toward the teacher's $0.860$ (final: $0.803$), and its ECE rises by $4.1$ percentage points (from $6.23\%$ to $10.32\%$). This finding---also reported by parallel groups working on the same project---is consistent with the view that the distillation objective transfers not just the teacher's class similarity structure but also its confidence calibration profile. Accuracy and calibration are therefore not jointly improved by KD: while KD raises accuracy by $+2.35$ pp, it actively degrades calibration. For applications where calibrated probabilities matter (e.g., abstention, downstream Bayesian fusion), an additional post-hoc calibration step (temperature scaling on a held-out set) would be required on top of the distilled model.
 
 % ========================================================================
 \section{Calibration Analysis}
