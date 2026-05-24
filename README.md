@@ -78,13 +78,33 @@ python scripts/train_baseline.py
 # Train teacher ResNet-110 (hard labels only)
 python scripts/train_teacher.py
 
-# Plot curves
-python scripts/plot_baseline_metrics.py
-python scripts/plot_teacher_metrics.py
+# Train a distilled student (per a YAML config under configs/)
+python scripts/train_distillation.py --config configs/distillation_resnet20_t4_a0p5.yaml
+
+# Plot consolidated training curves for any run
+python scripts/plot_metrics.py --metrics results/<stage>/<arch>/metrics.csv
 ```
 
 Hyperparameters are read from `configs/<experiment>.yaml`. Outputs go to
 `checkpoints/`, `results/`, and `plots/` under matching subpaths.
+
+`scripts/plot_metrics.py` auto-detects whether a run is basic (baseline/teacher)
+or distillation and produces a **single consolidated figure** per experiment
+(`training_curves.png`) under the corresponding `plots/<stage>/<arch>/` directory.
+
+### One-time CIFAR-100 download
+
+`data/` is gitignored, so each contributor downloads CIFAR-100 once locally.
+On macOS with Homebrew Python, torchvision's auto-downloader may fail with an
+SSL certificate error. Workaround:
+
+```bash
+mkdir -p data
+curl -L -o data/cifar-100-python.tar.gz \
+     https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz
+```
+
+torchvision will see the existing tarball, verify md5, and extract it.
 
 ---
 

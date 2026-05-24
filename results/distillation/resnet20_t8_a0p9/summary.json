@@ -1,0 +1,15 @@
+{
+    "experiment_name": "distill_resnet20_t8_a0p9_cifar100",
+    "model": "resnet20",
+    "width": 16,
+    "num_parameters": 278324,
+    "alpha": 0.9,
+    "temperature": 8.0,
+    "teacher_model": "resnet110",
+    "teacher_checkpoint": "/Users/saad.ali1/Desktop/Projects/Python/personal/on-device-image-classification/checkpoints/teacher/resnet110/best.pth",
+    "best_test_top1": 69.07,
+    "best_epoch": 89,
+    "epochs": 100,
+    "loss": "kd_hinton",
+    "training_type": "distillation"
+}

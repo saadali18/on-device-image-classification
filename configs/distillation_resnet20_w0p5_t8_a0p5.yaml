@@ -1,0 +1,40 @@
+experiment_name: distill_resnet20_w0p5_t8_a0p5_cifar100
+
+seed: 42
+
+device: auto
+
+dataset:
+  name: cifar100
+  data_dir: ./data
+  num_classes: 100
+  num_workers: 0
+
+model:
+  name: resnet20
+  width: 8        # half the base channel count (w=0.5 multiplier)
+
+training:
+  epochs: 100
+  batch_size: 128
+  optimizer: sgd
+  learning_rate: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+
+scheduler:
+  name: multistep
+  milestones: [60, 80]
+  gamma: 0.1
+
+distillation:
+  alpha: 0.5
+  temperature: 8.0
+  teacher_model: resnet110
+  teacher_width: 16
+  teacher_checkpoint: ./checkpoints/teacher/resnet110/best.pth
+
+output:
+  checkpoint_dir: ./checkpoints/distillation/resnet20_w0p5_t8_a0p5
+  result_dir: ./results/distillation/resnet20_w0p5_t8_a0p5
+  plot_dir: ./plots/distillation/resnet20_w0p5_t8_a0p5
