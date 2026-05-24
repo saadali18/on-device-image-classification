@@ -64,90 +64,327 @@ Deploying accurate image classifiers on resource-constrained edge devices requir
 
 \section{Introduction}
 \label{sec:intro}
-Deep Convolutional Neural Networks (CNNs) like ResNet-110 achieve state-of-the-art accuracy using skip connections in an over-parameterized regime ($\approx$1.7 million parameters) \citep{he2016deep}. However, the lifecycle of such a deep learning model is characterized by a fundamental asymmetry between the training and deployment phases. During the \textit{training} phase, computational resources are typically abundant: parallelized GPU clusters, large batch sizes, extensive epochs, and regularizers all serve the primary objective of maximizing generalization over a held-out test set. Latency is not a concern. Conversely, during \textit{deployment} to edge devices (e.g., mobile phones, embedded microcontrollers), the constraints flip entirely. The memory becomes strictly limited, making models like ResNet-110 impractical for such resource-constrained environments. Additionally, such hardware often lacks the massive parallel throughput of a GPU, enforcing hard limits on inference latency.
-% To formalize this using the standard notation for a feedforward neural network, let the input to a layer $l$ be denoted as $\vec{x}^{(l-1)} \in \mathbb{R}^{M^{(l-1)}}$, where $M^{(l-1)}$ is the dimensionality of the previous layer. The layer is parameterized by a weight matrix $W^{(l)} \in \mathbb{R}^{M^{(l)} \times M^{(l-1)}}$ and a bias vector $\vec{b}^{(l)} \in \mathbb{R}^{M^{(l)}}$. The forward pass computes the pre-activation $\vec{a}^{(l)} = W^{(l)}\vec{x}^{(l-1)} + \vec{b}^{(l)}$ and applies a non-linear activation function $\vec{x}^{(l)} = g(\vec{a}^{(l)})$.
+Deep Convolutional Neural Networks (CNNs) like ResNet-110 achieve state-of-the-art accuracy in an over-parameterized regime ($\approx$1.7M parameters) \citep{he2016deep}, but deployment to edge devices enforces hard constraints on memory and inference latency that such models violate. \citet{compression2006} introduced model compression as a principled solution; \citet{hinton2015distilling} formalized this as \emph{Knowledge Distillation} (KD) for neural networks.
 
-\citet{compression2006} first introduced the idea of model compression, demonstrating that a compact, faster neural network (student model) can be trained to approximate the function of a much larger, slower model (teacher model) with minimal loss in accuracy. \citet{hinton2015distilling} formalized this as \emph{Knowledge Distillation} (KD) for neural networks. % The key question then is: how much accuracy survives the move to a much smaller network?
-
-In standard $K$-class classification, a network produces $K$ logits and passes them through the softmax function
+In standard $K$-class classification, a network produces logits $z_k$ passed through softmax
 \begin{equation}
-  \hat{y}_k = P(y = k \mid \vec{x})
-             = \frac{e^{z_k}}{\sum_{j=1}^K e^{z_j}},
+  \hat{y}_k = \frac{e^{z_k}}{\sum_{j=1}^K e^{z_j}},
   \label{eq:softmax}
 \end{equation}
-where $z_k$ are the pre-softmax logits. Softmax translates unbounded logits into a normalized probability distribution which is optimized via the categorical cross-entropy loss
+optimized via categorical cross-entropy against one-hot labels $\vec{y}_i \in \{0,1\}^K$:
 \begin{equation}
-    L = -\frac{1}{N}\sum_{i=1}^N \sum_{k=1}^K y_{i,k} \log(\hat{y}_{i,k})
+    L = -\frac{1}{N}\sum_{i=1}^N \sum_{k=1}^K y_{i,k} \log(\hat{y}_{i,k}).
     \label{eq:cce}
 \end{equation}
-against one-hot hard labels for the ground-truth class $\vec{y}_i \in \{0,1\}^K$ where
-$\sum_k y_{i,k} = 1$. A hard label $\vec{y}_i$ is fundamentally limited because it discards the underlying geometric similarity between classes; it identifies the correct class but says nothing about any other class, including ones that are visually or semantically close. A large teacher network\footnote{We will reference the teacher model with a superscript $T$ (e.g. $\hat{\vec{y}}^T$) and the student model with superscript $S$ (e.g. $\hat{\vec{y}}^S$).} trained to near-convergence absorbs this inter-class similarity into its weight matrices. Its output distribution $\hat{\vec{y}}^T$ places most mass on the correct class but assigns small but nonzero probabilities to visually similar classes, encoding what \citet{hinton2015distilling} call \emph{dark knowledge}. Knowledge distillation~\cite{hinton2015distilling} incorporates $\hat{\vec{y}}^T$ directly into the student's training objective alongside the ground-truth $\vec{y}_i$, so the student optimizes against both the correct answer and the teacher's learned similarity structure over all $K$ classes. This project studies that transfer — \emph{what} the teacher actually transfers, how it behaves under different hyperparameter settings, and where it fails.
-%%%%%% A problem: when training with hard labels, the gradient of the CCE loss with respect to the pre-softmax logit $z_k^S$ at the output layer is simply $\hat{y}_k^S - y_k$. For a sample where the correct class has probability 0.95 and all others are near-zero, the gradient is dominated by a single signal. The small differences between near-zero probabilities — which carry the inter-class similarity information — contribute negligibly to the gradient.
+Hard labels discard inter-class similarity. A large teacher network\footnote{We use superscripts $T$ and $S$ to denote teacher and student quantities respectively.} trained to near-convergence absorbs this structure into its output distribution $\hat{\vec{y}}^T$, placing small but nonzero probabilities on semantically related classes --- \emph{dark knowledge} \citep{hinton2015distilling}. KD incorporates $\hat{\vec{y}}^T$ directly into the student's training objective, exposing this richer supervision signal. This project studies that transfer: \emph{what} the teacher transfers, how hyperparameters control it, and where it fails.
 
 \section{Literature Review}
 \label{sec:litreview}
 \subsection{Model Compression Landscape}
 \label{sec:compression}
 
-Based on the survey by \citet{gou2021knowledge}, modern model compression generally falls into three complementary families: knowledge \emph{distillation}, network \emph{pruning}, and network \emph{quantization}. Pruning removes redundant or inessential weights ($W_{ij}^{(l)} \approx 0$) (unstructured) or entire convolutional filters/weights (structured) from a pretrained network, reducing parameter count while leaving the architecture otherwise intact \citep{cheng2024surveydeepneuralnetwork}. Quantization reduces numerical precision of the weight matrices $W^{(l)}$ and activations $\vec{x}^{(l)}$---from 32-bit floats to 8-bit integers (INT8) or lower---shrinking memory and enabling faster arithmetic, also on the same architecture \citep{nagel2021whitepaperneuralnetwork}. Both methods start from a fixed network and modify it. Knowledge distillation takes a different approach entirely: it trains a new, compact (student) network from scratch, supervised by the larger (teacher) model. Pruning, quantization, and distillation are mutually compatible and are frequently pipelined in production environments. This paper is scoped to KD, and specifically to two forms of it: response-based distillation, which transfers knowledge through the teacher's output distribution, and feature-based distillation, which transfers it through intermediate layer representations. 
+Model compression falls into three families \citep{gou2021knowledge}: (i) \emph{Pruning} removes weights or filters from a pretrained network \citep{cheng2024surveydeepneuralnetwork}; (ii) \emph{Quantization} reduces numerical precision (e.g.\ FP32 → INT8) to shrink memory and accelerate arithmetic \citep{nagel2021whitepaperneuralnetwork}; (iii) \emph{Distillation} trains a new compact student network supervised by a larger teacher. All three are mutually compatible and frequently pipelined. This paper is scoped to response-based distillation, which transfers knowledge through the teacher's output distribution.
 
 \subsection{Response-Based Distillation}
 \label{sec:hinton}
 \paragraph{The hard-label gradient problem.}
-As established in Section~\ref{sec:intro}, the teacher's output $\hat{\vec{y}}^T$ encodes dark knowledge, the inter-class similarity structure that $\vec{y}_i$ discards. Can a student trained on hard labels access any of this structure? It cannot, and the reason is visible in the gradient.
-
 The gradient of Eq.~\eqref{eq:cce} with respect to the student's pre-softmax logit $z_k^S$ is
 \begin{equation}
-  \frac{\partial L}{\partial z_k^S} = \hat{y}_k^S - y_k. % Note: Should proof be added to appendix?
+  \frac{\partial L}{\partial z_k^S} = \hat{y}_k^S - y_k.
   \label{eq:cce_grad}
 \end{equation}
-For every non-target class, $y_k = 0$, so the gradient reduces to $\hat{y}_k^S$. Because softmax outputs are strictly positive, this gradient is always positive. The gradient descent update becomes
-$$ z_k^S \leftarrow z_k^S - \eta(\hat{y}_k^S) ,$$ 
-strictly decreasing the logits of all non-target classes and pushing them toward $-\infty$, regardless of their true similarity to the correct class.
+For every non-target class $y_k = 0$, so the update becomes
+$z_k^S \leftarrow z_k^S - \eta\hat{y}_k^S$,
+strictly pushing non-target logits toward $-\infty$ regardless 
+of class similarity.
 
 \paragraph{Temperature scaling.}
-\citet{hinton2015distilling} solved this by introducing the temperature-scaled softmax.  For already-trained teacher logits $\vec{z}^T = [z_1^T, \dots, z_K^T]^T$, the soft output at temperature $\tau > 0$ is
+\citet{hinton2015distilling} introduced the temperature-scaled softmax: for teacher logits $\vec{z}^T$,
 \begin{equation}
-\hat{y}_k^{T,\tau} = \frac{\exp(z_k^T / \tau)}{\sum_{j=1}^K \exp(z_j^T / \tau)}
+\hat{y}_k^{T,\tau} = \frac{\exp(z_k^T / \tau)}{\sum_{j=1}^K \exp(z_j^T / \tau)},
 \label{eq:softtarget}
 \end{equation}
-The same scaling is applied to the student to produce $\hat{y}_k^{S,\tau}$. Increasing $\tau$ softens the distribution by increasing its variance, thereby significantly increasing the relative numerical magnitude of the gradient of incorrect classes so that they generate meaningful gradients for the student network. At $\tau = 1$, Eq. \eqref{eq:softtarget} is a standard softmax. As $\tau \to \infty$, all scaled logits $z_k^T/\tau$ approach 0 and $e^0 = 1$, the distribution becomes asymptotically uniform ($\hat{y}_k^{T,\tau} \to 1/K$); conversely, as $\tau \to 0$, it collapses into a one-hot argmax function. Because distillation requires a smoother probability distribution, we typically operate where $\tau > 1$.
+applied equally to the student to produce $\hat{y}_k^{S,\tau}$. Increasing $\tau > 1$ softens the distribution, amplifying the relative magnitude of non-target class gradients and exposing inter-class similarity to the student. At $\tau\!\to\!\infty$ the distribution approaches uniform; at $\tau\!\to\!0$ it collapses to a one-hot argmax.
 
 \paragraph{Training objective.}
-The student is trained on a weighted sum of two losses, $L_{\mathrm{hard}}$ and $L_{\mathrm{soft}}$. The hard-label component is the standard CCE from Eq.~\eqref{eq:cce}, evaluated against $\vec{y}_i$ using the student's output at $\tau = 1$
+The student optimizes a weighted sum of a hard-label term,
 \begin{equation}
   L_{\mathrm{hard}}
     = -\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
         y_{i,k}\log\hat{y}_{i,k}^{S,1},
   \label{eq:lhard}
 \end{equation}
-ensuring that the student learns to predict the correct ground-truth labels. It anchors the student to the actual objective, preventing it from solely mimicking the teacher's potential errors or biases.
-The soft-label component is the KL divergence between the softened-outputs of the teacher's and student's distributions, both evaluated at temperature $\tau>1$ via Eq.~\eqref{eq:softtarget}
-\begin{align}
+and a soft-label KL divergence term,
+\begin{equation}
   L_{\mathrm{soft}}
-    &= \frac{1}{N}\sum_{i=1}^N
+    = \frac{1}{N}\sum_{i=1}^N
         D_{\mathrm{KL}}\!\left(
           \hat{\vec{y}}_i^{T,\tau}
           \,\Big\|\,
           \hat{\vec{y}}_i^{S,\tau}
-        \right) \nonumber \\
-    &= \frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
-        \hat{y}_{i,k}^{T,\tau}
-        \log\frac{\hat{y}_{i,k}^{T,\tau}}{\hat{y}_{i,k}^{S,\tau}}\label{eq:lsoft}\\
-    &= \frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
-        \hat{y}_{i,k}^{T,\tau}
-        \!\left(\log \hat{y}_{i,k}^{T,\tau} - \log \hat{y}_{i,k}^{S,\tau}\right)\nonumber\\
-    &= \underbrace{\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
-        \hat{y}_{i,k}^{T,\tau}\log \hat{y}_{i,k}^{T,\tau}}_{-H(\hat{\vec{y}}^{T,\tau})}
-      \;+\;
-      \underbrace{\left(-\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^K
-        \hat{y}_{i,k}^{T,\tau}\log \hat{y}_{i,k}^{S,\tau}\right)}_{H(\hat{\vec{y}}^{T,\tau},\,\hat{\vec{y}}^{S,\tau})}\nonumber\\
-    &= H(\hat{\vec{y}}^{T,\tau},\,\hat{\vec{y}}^{S,\tau}) - H(\hat{\vec{y}}^{T,\tau})\nonumber.
-\end{align}
-Since the teacher is fully pre-trained and its parameters are frozen during distillation, the teacher's output distribution $\hat{\vec{y}}^{T,\tau}$ is a constant with respect to the student parameters $\theta_S$. Consequently, $H(\hat{\vec{y}}^{T,\tau})$ is also a constant with respect to $\theta_S$, so minimizing $D_{\mathrm{KL}}(\hat{\vec{y}}^{T,\tau}\|\hat{\vec{y}}^{S,\tau})$ is equivalent to minimizing the cross-entropy $H(\hat{\vec{y}}^{T,\tau}, \hat{\vec{y}}^{S,\tau})$ with respect to the student's parameters.
+        \right).
+  \label{eq:lsoft}
+\end{equation}
+Expanding and grouping by entropy terms gives
+\begin{equation*}
+  L_{\mathrm{soft}} = H(\hat{\vec{y}}^{T,\tau},\,\hat{\vec{y}}^{S,\tau}) - H(\hat{\vec{y}}^{T,\tau}).
+\end{equation*}
+Since the teacher is frozen, $H(\hat{\vec{y}}^{T,\tau})$ is constant w.r.t.\ the student, so minimizing $L_{\mathrm{soft}}$ is equivalent to minimizing the cross-entropy $H(\hat{\vec{y}}^{T,\tau}, \hat{\vec{y}}^{S,\tau})$.
 
 \paragraph{The $\tau^2$ scaling factor.}
-\citet{hinton2015distilling} argue that the soft-label loss in combined distillation loss must be weighted by $\tau^2$. To prove this to be the case, let us differentiate $L_{\mathrm{soft}}$, defined in Eq.~\eqref{eq:lsoft}, with respect to a student logit $z_k^S$. The gradient for a single sample (dropping index $i$ for convenience) is, by chain rule,
+We defer the full gradient derivation to Appendix~\ref{app:tau2}; the result is $\partial L_{\mathrm{soft}}/\partial z_k^S = (z_k^S - z_k^T)/(K\tau^2)$, which scales as $1/\tau^2$ relative to the hard-label gradient. Without correction, raising $\tau$ shrinks the soft gradient as $1/\tau^2$, reverting the student to hard-label training; multiplying $L_{\mathrm{soft}}$ by $\tau^2$ cancels this shrinkage. The combined objective is:
+%
+\begin{equation}
+  \boxed{
+  L_{\mathrm{KD}}
+    = \alpha \cdot L_{\mathrm{hard}}
+    + (1-\alpha)\cdot\tau^2 \cdot L_{\mathrm{soft}}
+  }
+  \label{eq:lkd}
+\end{equation}
+where $\alpha \in [0,1]$ balances hard vs.\ soft supervision and $\tau$ controls distribution softness.
+
+\section{Methodology}
+\label{sec:method}
+
+\paragraph{Dataset.} All experiments use CIFAR-100: 60{,}000 colour images at $32{\times}32$ across $K=100$ classes (50k train / 10k test).
+
+\paragraph{Teacher.} ResNet-110 \citep{he2016deep} is trained from scratch on CIFAR-100 with standard cross-entropy for 160 epochs (LR milestones $\{80, 120\}$), then its weights are frozen for all distillation experiments. The longer schedule ensures the teacher converges to a high accuracy ceiling before being used as a soft-target source.
+
+\paragraph{Student.} ResNet-20 \citep{he2016deep} ($\approx$0.27M parameters, $6.3\times$ smaller than the teacher) serves as the default student. It is architecturally homogeneous with ResNet-110, isolating depth as the primary capacity variable.
+
+\subsection{Baseline and Student Variants}
+\label{sec:baseline}
+We train ResNet-20 from scratch with standard CCE (no teacher) to establish the lower bound for distillation to beat. For the capacity study we define two families: a \textit{depth} series ResNet-$d$, $d \in \{20, 32, 44, 56\}$ (width 16), and a \textit{width} series ResNet-20 with multiplier $w \in \{0.5, 1, 2\}$ (base channels $\{8, 16, 32\}$). The ResNet-20 ($w=1$) serves as the shared pivot.
+
+\subsection{Training Configuration}
+\label{sec:training_config}
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Training configuration.} Teacher uses 160 epochs with milestones $\{80,120\}$; all else identical.\\}
+  \label{tab:hyperparams}
+  \begin{tabular}{lc}
+    \toprule
+    \textbf{Hyperparameter} & \textbf{Value} \\
+    \midrule
+    Optimiser            & SGD + Momentum (0.9) \\
+    Initial LR           & 0.1 (MultiStep) \\
+    LR milestones / $\gamma$ & epochs 60, 80 / 0.1 \\
+    Weight decay         & $5\times10^{-4}$ \\
+    Batch size / Epochs  & 128 / 100 \\
+    Loss                 & Cross-entropy \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ========================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Baseline and Teacher}
+\label{sec:results_baseline_teacher}
+
+Training ResNet-20 from scratch on CIFAR-100 establishes the lower bound; the ResNet-110 teacher uses the longer schedule in Section~\ref{sec:method}. Best-checkpoint metrics are in Table~\ref{tab:baseline}. The $73.48 - 67.63 = 5.85$ pp teacher--baseline gap defines the headroom available to distillation.
+
+\begin{table}[ht]
+  \centering
+  \caption{
+    \textbf{Baseline and teacher best-checkpoint metrics.}}
+  \label{tab:baseline}
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{Metric} & \textbf{Baseline} & \textbf{Teacher} \\
+                    & \textbf{(ResNet-20)} & \textbf{(ResNet-110)} \\
+    \midrule
+    Parameters          & 278{,}324    & 1{,}736{,}564 \\
+    Best Epoch          & 89           & 129 \\
+    Test Top-1          & 67.63\%      & 73.48\% \\
+    Test Top-5          & 91.31\%      & 92.74\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Hyperparameter Ablation}
+\label{sec:results_hparam}
+
+\paragraph{Temperature.} Fixing $\alpha = 0.5$, we sweep $\tau \in \{2, 4, 8, 16\}$ (Table~\ref{tab:tau_sweep}). The sweep produces a clean inverted-U peaking at $\tau^* = 8$, recovering $40\%$ of the teacher--baseline gap at zero parameter cost.
+
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Temperature ablation} ($\alpha=0.5$, ResNet-20, 100 epochs).}
+  \label{tab:tau_sweep}
+  \begin{tabular}{ccc}
+    \toprule
+    $\tau$ & Test Top-1 & $\Delta$ vs.\ baseline \\
+    \midrule
+    2  & 69.49\% & $+1.86$ \\
+    4  & 69.64\% & $+2.01$ \\
+    \textbf{8}  & \textbf{69.98\%} & $\mathbf{+2.35}$ \\
+    16 & 69.73\% & $+2.10$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Loss weighting.} Using $\tau^* = 8$, we sweep $\alpha \in \{0.1, 0.5, 0.9\}$ (Table~\ref{tab:alpha_sweep}). All three values improve over the baseline; the balanced $\alpha^* = 0.5$ is optimal, with $\alpha=0.9$ recovering only $62\%$ of the gain --- confirming the soft-label term does real work.
+
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Loss-weighting ablation} ($\tau = 8$, ResNet-20, 100 epochs).}
+  \label{tab:alpha_sweep}
+  \begin{tabular}{ccc}
+    \toprule
+    $\alpha$ & Test Top-1 & $\Delta$ vs.\ baseline \\
+    \midrule
+    0.1 & 69.74\% & $+2.11$ \\
+    \textbf{0.5} & \textbf{69.98\%} & $\mathbf{+2.35}$ \\
+    0.9 & 69.07\% & $+1.44$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Architectural Scaling}
+\label{sec:results_arch}
+
+Using $(\tau^*, \alpha^*) = (8, 0.5)$, we measure distillation benefit along depth and width axes.
+
+\paragraph{Depth.} Table~\ref{tab:depth_sweep} sweeps ResNet-$d$, $d \in \{20, 32, 44, 56\}$ at width $w=1$.
+
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Depth ablation} ($\tau=8$, $\alpha=0.5$, 100 epochs). $\Delta_{\text{T}}$: gap vs.\ teacher (73.48\%).}
+  \label{tab:depth_sweep}
+  \begin{tabular}{lcccc}
+    \toprule
+    Student & Params & Top-1 & $\Delta$ base & $\Delta_{\text{T}}$ \\
+    \midrule
+    ResNet-20 & 278{,}324 & 69.98\% & $+2.35$ & $-3.50$ \\
+    ResNet-32 & 472{,}756 & 72.39\% & $+4.76$ & $-1.09$ \\
+    ResNet-44 & 667{,}188 & 73.52\% & $+5.89$ & $+0.04$ \\
+    \textbf{ResNet-56} & 861{,}620 & \textbf{74.72\%} & $\mathbf{+7.09}$ & $\mathbf{+1.24}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Width.} Table~\ref{tab:width_sweep} sweeps $w \in \{0.5, 1, 2\}$ at depth 20.
+
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Width ablation} (ResNet-20, $\tau=8$, $\alpha=0.5$, 100 epochs). $\Delta_{\text{T}}$: gap vs.\ teacher.}
+  \label{tab:width_sweep}
+  \begin{tabular}{ccccc}
+    \toprule
+    $w$ & Params & Top-1 & $\Delta$ base & $\Delta_{\text{T}}$ \\
+    \midrule
+    0.5 &    71{,}756 & 57.26\% & $-10.37$ & $-16.22$ \\
+    1.0 &   278{,}324 & 69.98\% & $+2.35$  & $-3.50$ \\
+    \textbf{2.0} & 1{,}096{,}196 & \textbf{75.43\%} & $\mathbf{+7.80}$ & $\mathbf{+1.95}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\columnwidth]{../plots/analysis/capacity.png}
+  \caption{
+    \textbf{Distilled accuracy vs.\ capacity} ($\tau=8$, $\alpha=0.5$). Blue circles: depth series; red squares: width series. Gray/black lines: baseline and teacher.
+  }
+  \label{fig:capacity}
+\end{figure}
+
+% ========================================================================
+\section{Dark Knowledge Analysis}
+\label{sec:dark_knowledge}
+Figure~\ref{fig:dark_knowledge} shows, for six held-out test images, the teacher's softmax distribution at $T=1$ and $T=4$.\footnote{Training used $\tau^*=8$; $T=4$ gives a more legible bar plot with identical top-$k$ ordering.} At $T=1$ the teacher's distribution is near one-hot; at $T=4$ it spreads tens of percentage points of mass onto semantically related classes. This off-argmax structure --- \emph{dark knowledge} \citep{hinton2015distilling} --- tells the student not just \emph{which} class is correct but \emph{how} the teacher's representation organises the class manifold, explaining the accuracy gains from distillation.
+
+\begin{figure*}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{../plots/analysis/dark_knowledge.png}
+  \caption{
+    \textbf{Teacher dark knowledge.} Each row: input image; teacher softmax at $T{=}1$; teacher softmax at $T{=}4$; hard-label baseline student; distilled student. The softened teacher (red) reveals the inter-class similarity structure transferred by the distillation loss.
+  }
+  \label{fig:dark_knowledge}
+\end{figure*}
+
+% ========================================================================
+\section{Calibration Analysis}
+\label{sec:calibration}
+Table~\ref{tab:calibration} reports Expected Calibration Error (ECE, 15 bins) and mean max-confidence $\bar{p}_{\max}$ on the CIFAR-100 test set; reliability diagrams are in Figure~\ref{fig:calibration}.
+
+\begin{table}[ht]
+  \centering
+  \caption{\textbf{Calibration on CIFAR-100 test set} (ECE, 15 bins).}
+  \label{tab:calibration}
+  \begin{tabular}{lccc}
+    \toprule
+    Model & Top-1 & ECE & $\bar{p}_{\max}$ \\
+    \midrule
+    Teacher (ResNet-110)     & 73.48\% & 12.54\% & 0.860 \\
+    Hard-label student       & 67.63\% & \textbf{6.23\%}  & 0.738 \\
+    Distilled ($\tau{=}8$, $\alpha{=}0.5$) & 69.98\% & 10.32\% & 0.803 \\
+    Distilled ($w{=}2$, best)& 75.43\% & 9.97\% & 0.854 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\columnwidth]{../plots/analysis/calibration.png}
+  \caption{
+    \textbf{Reliability diagrams (15 bins).} The hard-label baseline is the best-calibrated model; distilled students inherit the teacher's overconfidence.
+  }
+  \label{fig:calibration}
+\end{figure}
+
+Counter-intuitively, the hard-label student (ECE $6.23\%$) is better calibrated than both distilled students despite lower Top-1 accuracy. The KL term transfers the teacher's full output distribution---including its overconfidence profile ($\bar{p}_{\max}=0.860$)---so the distilled student's confidence shifts toward the teacher's, raising ECE to ${\sim}10\%$. Accuracy and calibration are not jointly improved by KD; post-hoc calibration is required for probability-sensitive downstream tasks.
+
+% ========================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Temperature traces a clean inverted-U.}
+The $\tau$ sweep confirms KD theory: too-sharp distributions approach hard labels while too-flat distributions approach uniform, both eliminating discriminative signal. $\tau^* = 8$ exceeds Hinton's canonical $\tau \approx 4$ because our ResNet-110 teacher retains $>40\%$ of mass on its argmax at $\tau=4$, requiring further softening to expose useful inter-class structure; with 100 classes, non-target logit gradients are also inherently small and benefit from the additional amplification.
+
+\paragraph{$\alpha$ is less sensitive but still optimal at the balanced setting.}
+All three $\alpha$ values improve over the baseline ($+1.44$--$+2.35$ pp), but the inverted-U peaks at $\alpha^* = 0.5$. The $\alpha=0.9$ deterioration (only $62\%$ of peak gain) rules out a pure-regularisation explanation, confirming the soft-label term is supplying genuinely new information. Conversely, $\alpha=0.1$ remains competitive, showing ground-truth anchoring retains value even when the teacher dominates.
+
+\paragraph{Capacity scaling: ``student exceeds teacher''.}
+Monotone scaling holds throughout our regime: three of five students cross the teacher's $73.48\%$ ceiling because our teacher sits below the ResNet-CIFAR family ceiling (${\sim}76\%$), so its soft-label signal continues to carry useful regularization well into the high-capacity regime. The headline result is $\mathbf{75.43\%}$ Top-1 ($+7.80$ pp) at $1.10$M parameters --- still $1.6\times$ smaller than the teacher. The $w=0.5$ ($72$k param) cell demonstrates the lower-end failure mode ($-10.37$ pp below baseline): the student lacks capacity to absorb either the dark-knowledge or discriminative signal, and the mixed distillation loss becomes noisier than CE alone.
+
+\paragraph{Accuracy and calibration are not jointly improved.}
+Distillation degrades calibration (ECE rises from $6.23\%$ to $10.32\%$) even as it improves Top-1 by up to $+7.80$ pp. The KL term transfers the teacher's full output distribution---including its overconfidence profile---not merely the argmax. Applications requiring calibrated probabilities must pair KD with a post-hoc calibration step (e.g.\ temperature scaling on a validation split). Single-seed training and a below-ceiling teacher ($73.48\%$ vs.\ literature ${\sim}76\%$) are the primary limitations of this study.
+
+% ========================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We studied response-based knowledge distillation \citep{hinton2015distilling} on CIFAR-100, using a ResNet-110 teacher ($73.48\%$ Top-1) to supervise a $6.3\times$ smaller ResNet-20 student. Our principal findings:
+
+\begin{enumerate}
+\item \textbf{Distillation closes $40\%$ of the teacher--baseline gap at zero parameter cost.} The best distilled ResNet-20 ($\tau^*=8$, $\alpha^*=0.5$) reaches $69.98\%$, recovering $2.35$ of the $5.85$ pp gap.
+
+\item \textbf{Temperature traces an inverted-U peaking at $\tau^*=8$.} This validates the theoretical prediction that too-sharp or too-flat distributions both lose discriminative signal; $\tau^*=8 > 4$ (Hinton) because our teacher has sharper logits and CIFAR-100 has 100 classes.
+
+\item \textbf{Loss weighting is less sensitive but still favours $\alpha^*=0.5$.} All $\alpha$ values improve over baseline; $\alpha=0.9$ recovers only $62\%$ of peak gain, ruling out a pure-regularisation effect.
+
+\item \textbf{Distilled students can exceed the teacher when capacity is sufficient.} Three of five Step-3 students surpass the teacher's ceiling, with the best ($w=2$) reaching $\mathbf{75.43\%}$ at $1.10$M params; the $w=0.5$ cell ($72$k params) falls $10.37$ pp below baseline.
+
+\item \textbf{Distillation degrades calibration even as it improves accuracy.} ECE rises from $6.23\%$ (baseline) to $10.32\%$ as the KL term transfers the teacher's overconfidence profile; post-hoc calibration is required for probability-sensitive applications.
+
+\item \textbf{Dark knowledge is directly observable.} Temperature-softened teacher distributions reveal inter-class similarity structure, and distilled student outputs are visibly closer to these distributions than to the hard-label baseline.
+\end{enumerate}
+
+Future work includes cross-architecture distillation (CNN to MobileNetV2), feature-based methods \citep{romero2015fitnets}, and combining KD with pruning or quantization.
+
+% ========================================================================
+\section*{Statement on the Use of AI Tools}
+Claude Code was used for software scaffolding, debugging, and structural report drafts. All experimental design, results interpretation, and mathematical derivations were produced by the team.
+
+% ========================================================================
+\appendix
+\section{Gradient of $L_{\mathrm{soft}}$ with Respect to $z_k^S$}
+\label{app:tau2}
+
+\citet{hinton2015distilling} argue that the soft-label loss in combined distillation loss must be weighted by $\tau^2$. To prove this to be the case, we differentiate $L_{\mathrm{soft}}$, defined in Eq.~\eqref{eq:lsoft}, with respect to a student logit $z_k^S$. The gradient for a single sample (dropping index $i$ for convenience) is, by chain rule,
 \begin{equation}
   \frac{\partial L_{\mathrm{soft}}}{\partial z_k^S}
   = \sum_{j=1}^{K}
@@ -236,322 +473,9 @@ Combining Eqs.~\eqref{eq:factor2_chain} and~\eqref{eq:softmax_jac} and substitut
   &= \frac{1}{K\tau^2}\!\left(z_k^S - z_k^T\right).\nonumber
   \label{eq:soft_grad_final}
 \end{align}
-Therefore, the gradient of $L_{\mathrm{soft}}$ scales as $1/\tau^2$, relative to the gradient of $L_{\mathrm{hard}}$, which carries no dependence on $\tau$. If we simply add the soft loss and hard loss together, raising the temperature would cause the soft gradient to shrink proportionally to $1/\tau^2$. Without correction, the optimizer would effectively ignore the soft targets (the \emph{dark knowledge}) and revert almost entirely to standard hard-label training. Multiplying $L_{\mathrm{soft}}$ by $\tau^2$ exactly cancels this shrinkage, keeping the balance between the two loss terms stable regardless of the chosen $\tau$. The combined distillation objective is therefore:
-%
-\begin{equation}
-  \boxed{
-  L_{\mathrm{KD}}
-    = \alpha \cdot L_{\mathrm{hard}}
-    + (1-\alpha)\cdot\tau^2 \cdot L_{\mathrm{soft}}
-  }
-  \label{eq:lkd}
-\end{equation}
-where $\alpha \in [0,1]$ controls the relative weight of hard versus soft supervision and $\tau$ controls the softness of the teacher distribution via Eq.~\eqref{eq:softtarget}.
+The gradient scales as $1/\tau^2$, justifying the $\tau^2$ prefactor in Eq.~\eqref{eq:lkd}: without it, raising $\tau$ would exponentially suppress the soft-label gradient and revert training to hard labels.
 
-% \subsection{Feature-Based Distillation}
-% \label{sec:fitnets}
-
-\section{Methodology}
-\label{sec:method}
-
-\paragraph{Dataset.}
-We conduct all experiments on CIFAR-100, a standard benchmark for multi-class image classification consisting of 60{,}000 colour images of resolution $32{\times}32$ pixels across $K=100$ classes, split into 50{,}000 training and 10{,}000 test images (500 train and 100 test images per class).
-
-\paragraph{Teacher.}
-We use ResNet-110 \citep{he2016deep} as the teacher network. Its depth and structure with skip connections allows it to learn rich inter-class similarity representations on CIFAR-100, making it a strong source of dark knowledge for distillation. The teacher is trained independently from scratch using standard cross-entropy against hard labels until convergence, and its weights are then frozen for all subsequent distillation experiments. We use a slightly longer schedule for the teacher than for the students (160 epochs with LR milestones at $\{80, 120\}$) to ensure the teacher converges to a higher accuracy ceiling and provides a stronger source of soft targets for distillation. All other hyperparameters match Table~\ref{tab:hyperparams}.
-
-\paragraph{Student.}
-We use ResNet-20 \citep{he2016deep} as the student network, which contains approximately 0.27 million parameters, a reduction of $6.3\times$ relative to the teacher. ResNet-20 is architecturally homogeneous with ResNet-110 (same residual blocks, same input resolution), which isolates depth as the sole variable differentiating teacher from student.
-
-\subsection{Baseline: Standard Cross-Entropy Training}
-\label{sec:baseline}
-To establish a reference point, we train ResNet-20 independently from scratch on CIFAR-100 using the standard CCE loss of Eq.~\eqref{eq:cce} against one-hot hard labels, with no teacher supervision. The test accuracy of this baseline directly quantifies how much accuracy is lost by moving from the 110-layer teacher to the 20-layer student, providing the lower bound against which all distillation results are compared.
-
-\paragraph{Student variants.}
-To study the accuracy gap as a function of student capacity, we define two families of student networks. For the \textit{depth} study, we use ResNet-$d$ for $d \in \{20, 32, 44, 56\}$, all with base channel width 16. For the \textit{width} study, we use ResNet-20 with channel multiplier $w \in \{0.5, 1, 2\}$, corresponding to base channels $\{8, 16, 32\}$. The ResNet-20 with $w=1$ serves as the pivot point shared by both studies and is the architecture for which the baseline in Section~\ref{sec:baseline} was trained.
-% \subsection{Response-Based Distillation}
-% \label{sec:kd_hinton}
-% % \subsection{Feature-Based Distillation}
-% % \label{sec:kd_fitnets}
-\subsection{Training Configuration}
-\label{sec:training_config}
-The baseline student is trained under the configuration given in Table~\ref{tab:hyperparams}. The same configuration will be reused for the teacher and the distilled student to ensure all comparisons are controlled.
-\begin{table}[ht]
-  \centering
-  \caption{\textbf{Training configuration for the student baseline.} Teacher and distillation runs will follow the same configuration unless otherwise noted.\\}
-  \label{tab:hyperparams}
-  \begin{tabular}{lc}
-    \toprule
-    \textbf{Hyperparameter} & \textbf{Value} \\
-    \midrule
-    Model                & ResNet-20 (width 16) \\
-    Optimiser            & SGD + Momentum \\
-    Momentum             & 0.9 \\
-    Initial LR           & 0.1 \\
-    LR schedule          & MultiStep \\
-    LR decay milestones  & epochs 60, 80 \\
-    LR decay factor $\gamma$ & 0.1 \\
-    Weight decay         & $5\times10^{-4}$ \\
-    Batch size           & 128 \\
-    Epochs               & 100 \\
-    Loss                 & Cross-entropy \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-% ========================================================================
-\section{Results}
-\label{sec:results}
-
-\subsection{Baseline and Teacher}
-\label{sec:results_baseline_teacher}
-
-\paragraph{Baseline (ResNet-20, hard labels).}
-Training ResNet-20 from scratch on CIFAR-100 under the configuration in Table~\ref{tab:hyperparams} with no teacher supervision establishes the lower bound that distillation must beat. Figure~\ref{fig:baseline} shows the Top-1 and Top-5 accuracy curves; the two sharp upward jumps at epochs 60 and 80 correspond to the LR decay milestones. The best-checkpoint metrics are summarised in Table~\ref{tab:baseline}. The $\approx$12.5\% point gap between Train Top-1 (80.11\%) and Test Top-1 (67.63\%) indicates mild overfitting.
-\begin{figure}[ht]
-  \centering
-  \includegraphics[width=\columnwidth]{imgs/baseline training.jpeg}
-  \caption{
-    \textbf{Baseline ResNet-20 training curves on CIFAR-100.}
-    Top-1 and Top-5 accuracy for train and test sets over 100 epochs.
-    LR is decayed by $\gamma=0.1$ at epochs 60 and 80, producing the
-    visible accuracy jumps.
-  }
-  \label{fig:baseline}
-\end{figure}
-\begin{table}[ht]
-  \centering
-  \caption{
-    \textbf{Best-checkpoint metrics for the student baseline.} Best epoch determined by highest Test Top-1 accuracy.\\}
-  \label{tab:baseline}
-  \begin{tabular}{lc}
-    \toprule
-    \textbf{Metric} & \textbf{Value} \\
-    \midrule
-    Best Epoch          & 89      \\
-    Test Top-1          & 67.63\% \\
-    Test Top-5          & 91.31\% \\
-    Train Top-1         & 80.11\% \\
-    Train Top-5         & 96.74\% \\
-    Train Loss          & 0.6754  \\
-    Test Loss           & 1.1439  \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\paragraph{Teacher (ResNet-110).}
-We train the ResNet-110 teacher independently with the longer schedule described in Section~\ref{sec:method}. Final-checkpoint metrics are summarised in Table~\ref{tab:teacher}. The teacher achieves \textbf{73.48\%} Test Top-1, providing the upper accuracy ceiling and the source of soft targets for all subsequent distillation experiments.
-\begin{table}[ht]
-  \centering
-  \caption{\textbf{Best-checkpoint metrics for the teacher.} Trained on CIFAR-100 with hard-label cross-entropy for 160 epochs (LR milestones $\{80, 120\}$).\\}
-  \label{tab:teacher}
-  \begin{tabular}{lc}
-    \toprule
-    \textbf{Metric} & \textbf{Value} \\
-    \midrule
-    Architecture        & ResNet-110 \\
-    Parameters          & 1{,}736{,}564 \\
-    Best Epoch          & 129       \\
-    Test Top-1          & 73.48\%   \\
-    Test Top-5          & 92.74\%   \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The teacher--baseline gap of $73.48 - 67.63 = 5.85$ percentage points defines the headroom available to distillation: a perfect transfer of the teacher's knowledge would recover this entire gap, while no transfer would leave the student at the baseline.
-
-\subsection{Hyperparameter Ablation}
-\label{sec:results_hparam}
-
-\paragraph{Temperature.}
-Fixing the hard-label weight at $\alpha = 0.5$, we sweep the softmax temperature $\tau \in \{2, 4, 8, 16\}$. Higher $\tau$ produces flatter teacher distributions and exposes more inter-class similarity to the student, but at the cost of weaker discriminative signal. Results are reported in Table~\ref{tab:tau_sweep}.
-
-\begin{table}[ht]
-  \centering
-  \caption{\textbf{Temperature ablation} ($\alpha=0.5$, ResNet-20 student, 100 epochs).}
-  \label{tab:tau_sweep}
-  \begin{tabular}{ccc}
-    \toprule
-    $\tau$ & Test Top-1 & $\Delta$ vs.\ baseline \\
-    \midrule
-    2  & 69.49\% & $+1.86$ \\
-    4  & 69.64\% & $+2.01$ \\
-    \textbf{8}  & \textbf{69.98\%} & $\mathbf{+2.35}$ \\
-    16 & 69.73\% & $+2.10$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The temperature sweep produces a clean inverted-U with the peak at $\tau^* = 8$, recovering 40\% of the 5.85 pp teacher--baseline gap at zero parameter cost. The $\tau = 16$ cell drops back below $\tau = 8$, confirming that distributions that are too uniform lose the discriminative signal needed for the student to converge; conversely, $\tau = 2$ is too sharp and approaches the hard-label limit, partially defeating the purpose of soft supervision.
-
-\paragraph{Loss weighting.}
-Using the best temperature $\tau^*$ from above, we sweep $\alpha \in \{0.1, 0.5, 0.9\}$, where larger $\alpha$ places more weight on the hard-label cross-entropy term. Results are reported in Table~\ref{tab:alpha_sweep}.
-
-\begin{table}[ht]
-  \centering
-  \caption{\textbf{Loss-weighting ablation} ($\tau = 8$, ResNet-20 student, 100 epochs).}
-  \label{tab:alpha_sweep}
-  \begin{tabular}{ccc}
-    \toprule
-    $\alpha$ & Test Top-1 & $\Delta$ vs.\ baseline \\
-    \midrule
-    0.1 & 69.74\% & $+2.11$ \\
-    \textbf{0.5} & \textbf{69.98\%} & $\mathbf{+2.35}$ \\
-    0.9 & 69.07\% & $+1.44$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The weighting sweep is qualitatively less sensitive than the temperature sweep: at the optimal $\tau=8$ the three $\alpha$ settings all improve on the baseline, but the balanced cell ($\alpha^* = 0.5$) remains the strongest. The deterioration at $\alpha = 0.9$ confirms that the soft-label term is doing real work---training with mostly hard labels and only a $10\%$ weight on the soft component recovers less than two-thirds of the gain available at the balanced setting. Conversely, $\alpha = 0.1$ (mostly soft) is competitive but does not exceed the balanced cell, suggesting the ground-truth signal continues to provide useful anchoring even when the teacher is doing most of the supervision.
-
-\subsection{Architectural Scaling}
-\label{sec:results_arch}
-
-Using the optimal $(\tau^*, \alpha^*)$ identified above, we measure how the distillation benefit varies with student capacity along two axes.
-
-\paragraph{Depth.}
-Fixing width $w=1$ (base channels 16), we sweep ResNet-$d$ for $d \in \{20, 32, 44, 56\}$ ($n \in \{3, 5, 7, 9\}$ residual blocks per stage). Results are reported in Table~\ref{tab:depth_sweep}.
-
-\begin{table}[ht]
-  \centering
-  \caption{\textbf{Depth ablation} ($\tau = 8$, $\alpha = 0.5$, 100 epochs). $\Delta_{\text{T}}$ is the gap against the ResNet-110 teacher (73.48\%).}
-  \label{tab:depth_sweep}
-  \begin{tabular}{lcccc}
-    \toprule
-    Student & Params & Test Top-1 & $\Delta$ vs.\ base & $\Delta_{\text{T}}$ \\
-    \midrule
-    ResNet-20 & 278{,}324 & 69.98\% & $+2.35$ & $-3.50$ \\
-    ResNet-32 & 472{,}756 & 72.39\% & $+4.76$ & $-1.09$ \\
-    ResNet-44 & 667{,}188 & 73.52\% & $+5.89$ & $+0.04$ \\
-    \textbf{ResNet-56} & 861{,}620 & \textbf{74.72\%} & $\mathbf{+7.09}$ & $\mathbf{+1.24}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\paragraph{Width.}
-Fixing depth at 20 layers, we sweep channel multiplier $w \in \{0.5, 1, 2\}$ (base channels 8, 16, 32). Results are reported in Table~\ref{tab:width_sweep}.
-
-\begin{table}[ht]
-  \centering
-  \caption{\textbf{Width ablation} (ResNet-20, $\tau = 8$, $\alpha = 0.5$, 100 epochs). $\Delta_{\text{T}}$ is the gap against the ResNet-110 teacher (73.48\%).}
-  \label{tab:width_sweep}
-  \begin{tabular}{ccccc}
-    \toprule
-    $w$ & Params & Test Top-1 & $\Delta$ vs.\ base & $\Delta_{\text{T}}$ \\
-    \midrule
-    0.5 &    71{,}756 & 57.26\% & $-10.37$ & $-16.22$ \\
-    1.0 &   278{,}324 & 69.98\% & $+2.35$  & $-3.50$ \\
-    \textbf{2.0} & 1{,}096{,}196 & \textbf{75.43\%} & $\mathbf{+7.80}$ & $\mathbf{+1.95}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[ht]
-  \centering
-  \includegraphics[width=\columnwidth]{../plots/analysis/capacity.png}
-  \caption{
-    \textbf{Distilled student accuracy as a function of student capacity ($\tau = 8$, $\alpha = 0.5$).}
-    Depth axis (blue circles): ResNet-$d$ with $d \in \{20, 32, 44, 56\}$ at width $w = 1$. Width axis (red squares): ResNet-20 at $w \in \{0.5, 1, 2\}$. Both series share the ResNet-20 ($w=1$) pivot. Reference lines: hard-label ResNet-20 baseline (gray) and ResNet-110 teacher ceiling (black).
-  }
-  \label{fig:capacity}
-\end{figure}
-
-% ========================================================================
-\section{Dark Knowledge Analysis}
-\label{sec:dark_knowledge}
-Figure~\ref{fig:dark_knowledge} shows, for six held-out CIFAR-100 test images, the teacher's top-5 softmax distribution at $T=1$ and $T=4$\footnote{Training used $\tau^* = 8$. For visualization we use $T = 4$, which gives a more legible bar plot while preserving the same qualitative structure (the top-$k$ ordering at $T=4$ and $T=8$ is identical).} alongside the predictions of the hard-label baseline student and the distilled student. At $T=1$ the teacher places nearly all probability mass on its argmax, identical in structure to a one-hot label; at $T=4$ the same logits produce a much flatter distribution that spreads tens of percentage points of mass onto semantically related classes. This off-argmax structure is the \emph{dark knowledge} \citep{hinton2015distilling} that the distillation objective transfers to the student: it tells the student not just \emph{which} class is correct but \emph{how} the teacher's learned representation organises the class manifold.
-
-\begin{figure*}[ht]
-  \centering
-  \includegraphics[width=\textwidth]{../plots/analysis/dark_knowledge.png}
-  \caption{
-    \textbf{Teacher dark knowledge.} Each row is one held-out test image. Columns: input image; teacher softmax at $T{=}1$; teacher softmax at $T{=}4$; hard-label baseline student softmax at $T{=}1$; distilled student softmax at $T{=}1$. The temperature-softened teacher (red) reveals the inter-class similarity structure that the distillation loss exposes to the student.
-  }
-  \label{fig:dark_knowledge}
-\end{figure*}
-
-% ========================================================================
-\section{Calibration Analysis}
-\label{sec:calibration}
-We additionally measure Expected Calibration Error (ECE) with 15 confidence bins on the CIFAR-100 test set. Table~\ref{tab:calibration} summarises results for the teacher, the hard-label baseline student, and the best distilled student (the $\tau=8$, $\alpha=0.5$ cell from Step 2a). Reliability diagrams are shown in Figure~\ref{fig:calibration}.
-
-\begin{table}[ht]
-  \centering
-  \caption{\textbf{Calibration on CIFAR-100 test set} (ECE, 15 bins). $\bar{p}_{\max}$ is the mean of the max-softmax confidence across the 10{,}000 test images.}
-  \label{tab:calibration}
-  \begin{tabular}{lccc}
-    \toprule
-    Model & Top-1 & ECE & $\bar{p}_{\max}$ \\
-    \midrule
-    Teacher (ResNet-110)     & 73.48\% & 12.54\% & 0.860 \\
-    Hard-label student (ResNet-20)       & 67.63\% & \textbf{6.23\%}  & 0.738 \\
-    Distilled ResNet-20 ($\tau{=}8, \alpha{=}0.5$) & 69.98\% & 10.32\% & 0.803 \\
-    Distilled ResNet-20 ($w{=}2$, best) & 75.43\% & 9.97\% & 0.854 \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[ht]
-  \centering
-  \includegraphics[width=\columnwidth]{../plots/analysis/calibration.png}
-  \caption{
-    \textbf{Reliability diagrams (15 bins).} The hard-label baseline is the best-calibrated of the three; the distilled student inherits part of the teacher's overconfidence pattern.
-  }
-  \label{fig:calibration}
-\end{figure}
-
-Counter-intuitively, the \emph{hard-label} student is the best-calibrated model in the family. Despite achieving lower Top-1 than both distilled students, it has the smallest ECE ($6.23\%$). Both distilled students' mean max-probabilities shift toward the teacher's $0.860$: the ResNet-20 ($w=1$) distilled student lands at $0.803$ with ECE $10.32\%$, and the headline ResNet-20 ($w=2$) distilled student lands at $0.854$ with ECE $9.97\%$ --- essentially the teacher's confidence profile. This pattern is consistent with the view that the KL term in $\mathcal{L}_{\text{KD}}$ transfers the teacher's full output distribution (including its calibration profile), not merely its argmax. Accuracy and calibration are therefore not jointly improved by KD: while KD raises Top-1 by up to $+7.80$ pp, it raises ECE by roughly $4$ pp. For applications where calibrated probabilities matter (selective prediction, abstention, downstream Bayesian fusion), an additional post-hoc calibration step (e.g.\ temperature scaling on a held-out validation split) would be required on top of the distilled model.
-
-% ========================================================================
-\section{Discussion}
-\label{sec:discussion}
-
-\paragraph{Temperature traces a clean inverted-U.}
-The $\tau$ sweep in Table~\ref{tab:tau_sweep} traces the inverted-U trajectory that response-based KD theory predicts: at $\tau = 1$ the soft-label distribution collapses toward a one-hot vector and the soft component of $\mathcal{L}_{\text{KD}}$ becomes essentially a second hard-label term carrying no extra information; at $\tau \to \infty$ the softened distribution approaches the uniform distribution over $K$ classes and again carries no discriminative signal. The optimum at $\tau^* = 8$ in our experiments is somewhat higher than the canonical Hinton value of $\tau \approx 4$. We attribute this to two factors. First, our teacher (ResNet-110 trained for 160 epochs with multi-step decay) has substantially sharper output distributions than the ImageNet-style teachers Hinton et al.\ originally studied: at $\tau = 4$ the teacher still places $>40\%$ of mass on its argmax for typical CIFAR-100 examples, so further softening continues to yield useful information until $\tau \approx 8$. Second, with 100 classes the relative gradient magnitudes on non-target logits are inherently small, and a larger temperature amplifies them enough to provide a usable training signal in the early epochs.
-
-\paragraph{$\alpha$ is less sensitive than $\tau$ but still optimal at the balanced setting.}
-The $\alpha$ sweep in Table~\ref{tab:alpha_sweep} is qualitatively much flatter than the $\tau$ sweep --- all three cells improve over the baseline by between $+1.44$ and $+2.35$ pp --- but it still exhibits the same inverted-U structure with the peak at $\alpha^* = 0.5$. The deterioration at $\alpha = 0.9$ is informative: with $90\%$ weight on hard labels and only $10\%$ on the teacher, the student recovers $1.44$ pp of gain --- nontrivial, but only $\sim 60\%$ of what the balanced cell achieves. This rules out the possibility that the gain we observe is simply a regularization effect of the additional loss term; if it were, increasing the hard-label weight should not hurt. Conversely, $\alpha = 0.1$ remains competitive: the ground-truth labels continue to provide useful anchoring even when the teacher does most of the supervision, but they are not strictly necessary for the gain.
-
-\paragraph{Capacity scaling: ``student exceeds teacher''.}
-The depth and width sweeps (Tables~\ref{tab:depth_sweep}--\ref{tab:width_sweep}, Figure~\ref{fig:capacity}) reveal a stronger result than expected. Three of the five Step-3 students do not merely close the gap to the teacher --- they \emph{cross} it. ResNet-44 ties the teacher ($+0.04$ pp), ResNet-56 exceeds it by $+1.24$ pp, and the wider ResNet-20 ($w=2$) exceeds it by $+1.95$ pp. The headline distilled result is therefore $\mathbf{75.43\%}$ Top-1 ($+7.80$ pp over the hard-label baseline), achieved by ResNet-20 with width multiplier $w=2$.
-
-This pattern is qualitatively different from the ``middle wins'' capacity-gap curve of \citet{cho2019efficacy}. In their setting, the teacher (ResNet-44, $73\%$ Top-1) was already near the ResNet-CIFAR family's natural ceiling, and large students like ResNet-32 already learn well from hard labels alone --- leaving little room for distillation to add value. In our setting the teacher sits at $73.48\%$, well below the family ceiling (the literature reports $\sim76\%$ for a fully-converged ResNet-110); the soft-label signal supplied by this teacher therefore continues to carry useful regularization information for students well into the deep / wide regime. The result is monotone scaling: each capacity increment delivers nearly a full percentage point of additional Top-1.
-
-A second observation is that depth and width trace nearly identical curves in $(\text{params}, \text{Top-1})$ space (Figure~\ref{fig:capacity}). At matched parameter budgets, the depth series and width series differ by no more than $\sim 0.7$ pp. For practitioners this is useful: when accuracy is the only constraint, depth and width are interchangeable axes of capacity for distillation. The width axis has the practical advantage of being parallelizable on accelerators and of preserving residual-block count (and therefore inference latency on hardware with fast 1$\times$1 convolutions), which makes the $w=2$ student a particularly attractive deployment target.
-
-Conversely, the $w=0.5$ ($71{,}756$-param) cell shows the lower-end failure mode: the narrow student finishes at $57.26\%$, which is $10.37$ pp \emph{below} the hard-label ResNet-20 baseline. With only $\sim 70$k parameters the student lacks the capacity to model either the dark-knowledge signal from the teacher or the discriminative signal from the labels, and the distillation loss --- which mixes both --- becomes a noisier optimisation target than CE alone would have been. This is the genuine ``too small to absorb dark knowledge'' regime, distinct from the ``too big to need it'' regime that \citet{cho2019efficacy} highlight.
-
-\paragraph{Accuracy and calibration are not jointly improved.}
-The most surprising finding of our study is summarised in Table~\ref{tab:calibration} and Figure~\ref{fig:calibration}: distillation makes the student measurably \emph{less} calibrated than the hard-label baseline despite making it measurably more accurate. The hard-label student has ECE $6.23\%$ and mean max-probability $0.738$; the distilled student has ECE $10.32\%$ and mean max-probability $0.803$. The student's confidence has shifted toward the teacher's confidence profile (the teacher sits at $0.860$). This is consistent with the view that the KL term in $\mathcal{L}_{\text{KD}}$ directly transfers the teacher's full output distribution --- including the calibration profile encoded in its temperature-scaled probabilities --- not just the argmax. The practical implication is that for downstream applications where calibration matters (selective prediction, abstention, downstream Bayesian fusion), KD alone is insufficient; an additional post-hoc calibration step on a held-out validation set would be required.
-
-\paragraph{Limitations and threats to validity.}
-\textit{(a) Single seed.} All cells were trained with a single random seed (42); the inverted-U pattern is robust enough that this is unlikely to invert, but the gap of $0.49$ percentage points between $\tau = 2$ and $\tau = 8$ is close to the per-seed run-to-run variance reported in the KD literature, so the precise location of $\tau^*$ should be read with caution. \textit{(b) Teacher schedule.} Our teacher used a slightly longer schedule than the students (Section~\ref{sec:method}). The trained teacher's $73.48\%$ Top-1 sits below the typical literature ceiling for ResNet-110 on CIFAR-100 ($\sim 76\%$), so the absolute distilled numbers reported here are lower than what a fully-converged teacher would yield; the relative shape of the ablation surfaces should generalise. \textit{(c) Same-architecture, response-only.} We study one architecture family (ResNet-CIFAR) and one form of distillation (response-based, Hinton-style). The mid-report committed to a same-architecture, response-only study; cross-architecture distillation and feature-based methods \citep{romero2015fitnets, zhao2022decoupled} are out of scope here.
-
-% ========================================================================
-\section{Conclusion}
-\label{sec:conclusion}
-
-We studied response-based knowledge distillation \citep{hinton2015distilling} as a model-compression strategy for deploying compact CIFAR-100 image classifiers on resource-constrained devices. A pretrained ResNet-110 teacher ($73.48\%$ Top-1) supervised a $6.3\times$ smaller ResNet-20 student via the combined hard-label cross-entropy + temperature-scaled KL divergence objective. Our principal findings:
-
-\begin{enumerate}
-\item \textbf{Distillation closes $40\%$ of the teacher--baseline gap at zero parameter cost.} The best distilled ResNet-20 ($\tau^* = 8$, $\alpha^* = 0.5$) reaches $69.98\%$ Top-1, recovering $2.35$ pp of the $5.85$ pp gap between the hard-label baseline ($67.63\%$) and the teacher ceiling ($73.48\%$). Distillation is a strictly Pareto-improving step on the same student architecture.
-
-\item \textbf{Temperature traces an inverted-U with peak at $\tau^* = 8$.} The $\tau \in \{2, 4, 8, 16\}$ sweep produces a monotonic rise from $69.49\%$ at $\tau = 2$ to $69.98\%$ at $\tau = 8$, followed by a drop back to $69.73\%$ at $\tau = 16$. This empirically validates the theoretical prediction that distributions which are either too sharp (collapsing to hard labels) or too flat (collapsing to uniform) lose the discriminative signal needed for the student to converge.
-
-\item \textbf{Loss weighting is less sensitive but still favours a balanced setting.} All three $\alpha$ values ($0.1, 0.5, 0.9$) improve over the baseline, but $\alpha = 0.5$ is optimal. The $\alpha = 0.9$ cell (mostly hard supervision) recovers only $62\%$ of the gain at $\alpha = 0.5$, ruling out a pure-regularisation explanation for the distillation effect.
-
-\item \textbf{Distillation enables the student to exceed the teacher when capacity is sufficient.} Three of five Step-3 students cross the teacher's $73.48\%$ ceiling: ResNet-44 ($+0.04$), ResNet-56 ($+1.24$), and the wider ResNet-20 with $w=2$ ($+1.95$). The best distilled student reaches $\mathbf{75.43\%}$ Top-1 ($+7.80$ pp over baseline) at $1.10$M parameters --- still $1.6\times$ smaller than the teacher. Depth and width trace nearly identical capacity--accuracy curves; for deployment the wider ResNet-20 ($w=2$) is preferable because it has the same inference latency as ResNet-20 while reaching higher accuracy than ResNet-56. The $w=0.5$ ($72$k params) cell shows the lower-end failure mode: the student lacks capacity to absorb the dark-knowledge signal and finishes $10.37$ pp \emph{below} the hard-label baseline.
-
-\item \textbf{Distillation degrades calibration even as it improves accuracy.} The distilled student's ECE rises from $6.23\%$ (hard baseline) to $10.32\%$, with mean max-probability shifting from $0.738$ toward the teacher's $0.860$. The KL term in the distillation objective transfers the teacher's full output distribution---including its confidence calibration profile---not merely its argmax. For applications where calibration matters, KD must be paired with a post-hoc calibration step.
-
-\item \textbf{Dark knowledge is directly observable.} Per-image bar plots of teacher softmax at $T = 1$ vs $T = 4$ make the inter-class similarity structure visually explicit. The distilled student's output distributions are visibly closer to the temperature-softened teacher than to the hard-label baseline, providing a qualitative mechanism for the accuracy gain reported in (1).
-\end{enumerate}
-
-Future extensions of this study include cross-architecture distillation (transferring from a CNN teacher to architecturally distinct mobile-friendly students such as MobileNetV2), feature-level methods that distill intermediate representations alongside output logits \citep{romero2015fitnets}, and combining distillation with complementary compression strategies (structured pruning, INT8 quantization).
-
-% ========================================================================
-\section*{Statement on the Use of AI Tools}
-AI coding assistants (Claude Code) were used by the team for software scaffolding (organising the trainer / data / model module structure under the existing codebase conventions), debugging environmental issues (Python SSL handling on macOS, MPS device selection), generating boilerplate plotting code, and producing structural drafts of this report. All experimental design --- choice of ablation grid, choice of architectures, choice of evaluation metrics --- as well as all interpretation of results were made by the team. The mathematical derivations in Section~\ref{sec:method} (in particular the $\tau^2$ scaling factor proof) were written and verified by the team without AI assistance. All trained checkpoints were produced by the team's own training runs; no pretrained weights were imported from external sources.
+The full derivation intermediate steps (Eqs.~\eqref{eq:chain}--\eqref{eq:factor1}--\eqref{eq:softmax_jac}) follow from combining the logarithmic quotient rule, the quotient rule for the softmax Jacobian (diagonal and off-diagonal cases), and the chain rule through $a_k^S = z_k^S/\tau$.
 
 \bibliography{references}
 \bibliographystyle{icml2025}
