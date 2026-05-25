@@ -52,13 +52,14 @@
     % ---- left ----
     \begin{column}{0.50\textwidth}
       \textbf{The deployment gap}
-      \begin{itemize}\small
+      \begin{itemize}\footnotesize
         \item Large CNNs (ResNet-110: \textbf{1.7M params}) achieve high accuracy.
         \item But edge devices have hard limits on memory, latency, and power
-        \item \textbf{Knowledge Distillation}: train a compact \emph{student} to mimic a large pretrained \emph{teacher}
+        \item Model Compression for NN introduced in 2006
+        \item Train a compact \emph{student} to mimic a large pretrained \emph{teacher}
       \end{itemize}
       \vspace{0.35em}
-      \textbf{Hard labels discard inter-class similarity}
+      \textbf{Student trained on Hard Labels}
       \begin{itemize}\small
         \item CCE gradient: $\partial L/\partial z_k^S = \hat{y}_k^S - y_k$
         \item Non-target classes always have $y_k{=}0$, pushing all wrong logits to $-\infty$ regardless of class similarity
@@ -91,51 +92,9 @@
 \end{frame}
 
 % ---------------------------------------------------------------
-% Slide 3: Dataset & Experimental Setup
-% ---------------------------------------------------------------
-\begin{frame}{Dataset \& Experimental Setup}
-  \begin{columns}[t]
-    % ---- left ----
-    \begin{column}{0.42\textwidth}
-      \textbf{CIFAR-100}
-      \begin{itemize}\small
-        \item 60{,}000 images, $32{\times}32$, 100 classes
-        \item 50k train / 10k test (500 per class)
-      \end{itemize}
-      \vspace{0.4em}
-      \textbf{Models (best-checkpoint)}
-      \begin{center}\tiny
-        \begin{tabular}{lcc}
-          \toprule
-          & Params & Top-1\\
-          \midrule
-          Teacher (RN-110) & 1.74M & 73.48\%\\
-          \rowcolor{yellow!30}
-          Baseline (RN-20) & 0.28M & 67.63\%\\
-          \bottomrule
-        \end{tabular}
-      \end{center}
-      \vspace{0.2em}
-      {\small\textbf{Gap = 5.85 pp} = distillation headroom}
-    \end{column}
-    % ---- right ----
-    \begin{column}{0.55\textwidth}
-      \textbf{Baseline ResNet-20 training on CIFAR-100 (100 epochs).}
-      \vspace{0.1em}
-
-      \includegraphics[width=\linewidth, height=4.2cm, keepaspectratio]%
-        {plots/baseline/resnet20/training_curves.png}
-
-      \vspace{0.1em}
-      {\footnotesize LR decays at epochs 60 \& 80 produce the visible accuracy jumps. Train$-$test gap $\approx\!12.5$ pp indicates mild overfitting.}
-    \end{column}
-  \end{columns}
-\end{frame}
-
-% ---------------------------------------------------------------
 % Slide 4: Methodology
 % ---------------------------------------------------------------
-\begin{frame}{Methodology}
+\begin{frame}{Methodology: Response-Based Knowledge Distillation}
   \begin{columns}[t]
     % ---- left ----
     \begin{column}{0.50\textwidth}
@@ -187,6 +146,49 @@
     \end{column}
   \end{columns}
 \end{frame}
+
+% ---------------------------------------------------------------
+% Slide 3: Dataset & Experimental Setup
+% ---------------------------------------------------------------
+\begin{frame}{Dataset \& Experimental Setup}
+  \begin{columns}[t]
+    % ---- left ----
+    \begin{column}{0.42\textwidth}
+      \textbf{CIFAR-100}
+      \begin{itemize}\small
+        \item 60{,}000 images, $32{\times}32$, 100 classes
+        \item 50k train / 10k test (500 per class)
+      \end{itemize}
+      \vspace{0.4em}
+      \textbf{Models (best-checkpoint)}
+      \begin{center}\tiny
+        \begin{tabular}{lcc}
+          \toprule
+          & Params & Top-1\\
+          \midrule
+          Teacher (RN-110) & 1.74M & 73.48\%\\
+          \rowcolor{yellow!30}
+          Baseline (RN-20) & 0.28M & 67.63\%\\
+          \bottomrule
+        \end{tabular}
+      \end{center}
+      \vspace{0.2em}
+      {\small\textbf{Gap = 5.85 pp} = distillation headroom}
+    \end{column}
+    % ---- right ----
+    \begin{column}{0.55\textwidth}
+      \textbf{Baseline ResNet-20 training on CIFAR-100 (100 epochs).}
+      \vspace{0.1em}
+
+      \includegraphics[width=\linewidth, height=4.2cm, keepaspectratio]%
+        {plots/baseline/resnet20/training_curves.png}
+
+      \vspace{0.1em}
+      {\footnotesize LR decays at epochs 60 \& 80 produce the visible accuracy jumps. Train$-$test gap $\approx\!12.5$ pp indicates mild overfitting.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
 
 % ---------------------------------------------------------------
 % Slide 5: Results
@@ -251,8 +253,8 @@
       \includegraphics[width=\linewidth, height=3.3cm, keepaspectratio]%
         {plots/analysis/dark_knowledge.png}
 
-      {\footnotesize Each row: image $|$ teacher $T{=}1$ $|$ teacher $T{=}4$ $|$ hard-label student $|$ distilled student.
-      At $T{=}4$, probability spreads to similar classes; distilled student mimics this structure while hard-label student does not.}
+      {\footnotesize Each row: image $|$ teacher $\tau{=}1$ $|$ teacher $\tau{=}4$ $|$ hard-label student $|$ distilled student.
+      At $\tau{=}4$, probability spreads to similar classes; distilled student mimics this structure while hard-label student does not.}
     \end{column}
     % ---- right: calibration ----
     \begin{column}{0.45\textwidth}
